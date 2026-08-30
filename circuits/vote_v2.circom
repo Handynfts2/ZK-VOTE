@@ -20,7 +20,8 @@ include "merkle_tree.circom";
 //
 // chainId prevents replay attacks: a proof generated for one chain
 // (e.g., testnet) cannot be replayed on another chain (e.g., mainnet).
-\n    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+template VoteV2(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)

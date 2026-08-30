@@ -37,10 +37,7 @@ delete process.env.MEMBERSHIP_SBT_CONTRACT_ID;
 
 const { app } = await import("../src/index.ts");
 const { config, LIMITS } = await import("../src/config.js");
-const {
-  initDb,
-  closeDb,
-} = await import("../src/services/db.js");
+const { initDb, closeDb } = await import("../src/services/db.js");
 
 const auth = {
   Authorization: "Bearer route-branches-token",
@@ -80,42 +77,31 @@ test("circuit status returns defaults for vote and comment circuits", async () =
 });
 
 test("DAO listing handles an optional user address", async () => {
-  const response = await request(app)
-    .get("/daos")
-    .query({ user: author });
+  const response = await request(app).get("/daos").query({ user: author });
 
   assert.equal(response.statusCode, 200);
-  assert.ok(Array.isArray(response.body.daos));
+  assert.ok(Array.isArray(response.body.data));
 });
 
 test("IPFS metadata validates version and video URLs", async () => {
-  let response = await request(app)
-    .post("/ipfs/metadata")
-    .set(auth)
-    .send({});
+  let response = await request(app).post("/ipfs/metadata").set(auth).send({});
 
   assert.equal(response.statusCode, 400);
   assert.match(response.body.error, /metadata\.version/);
 
-  response = await request(app)
-    .post("/ipfs/metadata")
-    .set(auth)
-    .send({
-      version: 1,
-      videoUrl: "https://example.com/not-allowed",
-    });
+  response = await request(app).post("/ipfs/metadata").set(auth).send({
+    version: 1,
+    videoUrl: "https://example.com/not-allowed",
+  });
 
   assert.equal(response.statusCode, 400);
   assert.match(response.body.error, /YouTube and Vimeo/);
 
-  response = await request(app)
-    .post("/ipfs/metadata")
-    .set(auth)
-    .send({
-      version: 1,
-      body: "Valid metadata",
-      videoUrl: "https://youtube.com/watch?v=test",
-    });
+  response = await request(app).post("/ipfs/metadata").set(auth).send({
+    version: 1,
+    body: "Valid metadata",
+    videoUrl: "https://youtube.com/watch?v=test",
+  });
 
   assert.equal(response.statusCode, 503);
   assert.deepEqual(response.body, {
@@ -129,9 +115,7 @@ test("IPFS image upload handles missing and invalid files", async () => {
   try {
     Object.assign(config, { ipfsEnabled: true });
 
-    let response = await request(app)
-      .post("/ipfs/image")
-      .set(auth);
+    let response = await request(app).post("/ipfs/image").set(auth);
 
     assert.equal(response.statusCode, 400);
     assert.deepEqual(response.body, {
@@ -141,14 +125,10 @@ test("IPFS image upload handles missing and invalid files", async () => {
     response = await request(app)
       .post("/ipfs/image")
       .set(auth)
-      .attach(
-        "image",
-        Buffer.from("plain text"),
-        {
-          filename: "notes.txt",
-          contentType: "text/plain",
-        },
-      );
+      .attach("image", Buffer.from("plain text"), {
+        filename: "notes.txt",
+        contentType: "text/plain",
+      });
 
     assert.equal(response.statusCode, 400);
     assert.match(response.body.error, /Unsupported file type/);
@@ -156,14 +136,10 @@ test("IPFS image upload handles missing and invalid files", async () => {
     response = await request(app)
       .post("/ipfs/image")
       .set(auth)
-      .attach(
-        "image",
-        Buffer.alloc(LIMITS.MAX_IMAGE_SIZE + 1),
-        {
-          filename: "oversized.png",
-          contentType: "image/png",
-        },
-      );
+      .attach("image", Buffer.alloc(LIMITS.MAX_IMAGE_SIZE + 1), {
+        filename: "oversized.png",
+        contentType: "image/png",
+      });
 
     assert.equal(response.statusCode, 400);
     assert.match(response.body.error, /File too large/);
@@ -173,31 +149,25 @@ test("IPFS image upload handles missing and invalid files", async () => {
 });
 
 test("comment edit and delete fail closed at the RPC boundary", async () => {
-  let response = await request(app)
-    .post("/comment/edit")
-    .set(auth)
-    .send({
-      daoId: 1,
-      proposalId: 2,
-      commentId: 3,
-      newContentCid: validCid,
-      author,
-    });
+  let response = await request(app).post("/comment/edit").set(auth).send({
+    daoId: 1,
+    proposalId: 2,
+    commentId: 3,
+    newContentCid: validCid,
+    author,
+  });
 
   assert.equal(response.statusCode, 500);
   assert.deepEqual(response.body, {
     error: "Internal server error",
   });
 
-  response = await request(app)
-    .post("/comment/delete")
-    .set(auth)
-    .send({
-      daoId: 1,
-      proposalId: 2,
-      commentId: 3,
-      author,
-    });
+  response = await request(app).post("/comment/delete").set(auth).send({
+    daoId: 1,
+    proposalId: 2,
+    commentId: 3,
+    author,
+  });
 
   assert.equal(response.statusCode, 500);
   assert.deepEqual(response.body, {
@@ -265,14 +235,10 @@ test("valid image upload reaches the IPFS service failure boundary", async () =>
     const response = await request(app)
       .post("/ipfs/image")
       .set(auth)
-      .attach(
-        "image",
-        Buffer.from("small-image-content"),
-        {
-          filename: "valid.png",
-          contentType: "image/png",
-        },
-      );
+      .attach("image", Buffer.from("small-image-content"), {
+        filename: "valid.png",
+        contentType: "image/png",
+      });
 
     assert.equal(response.statusCode, 500);
     assert.deepEqual(response.body, {
@@ -289,14 +255,11 @@ test("valid metadata reaches the IPFS service failure boundary", async () => {
   try {
     Object.assign(config, { ipfsEnabled: true });
 
-    const response = await request(app)
-      .post("/ipfs/metadata")
-      .set(auth)
-      .send({
-        version: 1,
-        body: '<script>removed()</script>Valid metadata',
-        videoUrl: "https://vimeo.com/123456",
-      });
+    const response = await request(app).post("/ipfs/metadata").set(auth).send({
+      version: 1,
+      body: "<script>removed()</script>Valid metadata",
+      videoUrl: "https://vimeo.com/123456",
+    });
 
     assert.equal(response.statusCode, 500);
     assert.deepEqual(response.body, {
@@ -314,8 +277,7 @@ test("valid anonymous comment reaches controlled execution handling", async () =
     .send({
       daoId: 1,
       proposalId: 1,
-      contentCid:
-        "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+      contentCid: "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
       parentId: null,
       voteChoice: true,
       nullifier: "11".repeat(32),

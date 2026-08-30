@@ -12,6 +12,7 @@ import {
   verifyAuditChain,
   formatAsCef,
 } from "../services/audit.js";
+import { getEventsForDao } from "../services/db.js";
 import { log } from "../services/logger.js";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -105,6 +106,58 @@ router.get("/admin/audit-log", authGuard, queryLimiter, (async (
   } catch (err) {
     log("error", "admin_audit_log_failed", { error: (err as Error).message });
     res.status(500).json({ error: "Failed to fetch audit log" });
+  }
+}) as AsyncHandler);
+
+// ============================================
+// SBT TRANSFER-ATTEMPT REVIEW (#357)
+// ============================================
+
+/**
+ * GET /admin/sbt-transfer-attempts - Review flagged membership-SBT
+ * transfer/approval attempts for one DAO (admin only).
+ *
+ * The membership-sbt contract always rejects transfer/transfer_from/approve
+ * (soulbound); services/sbt-guard.ts detects the attempt from the
+ * transaction envelope regardless of on-chain success/failure and records
+ * it here as an `sbt_transfer_attempt` event.
+ *
+ * Query params:
+ *   daoId  - required, the DAO to review
+ *   limit  - max rows (default 50, max 500)
+ *   offset - pagination offset (default 0)
+ */
+router.get("/admin/sbt-transfer-attempts", authGuard, queryLimiter, (async (
+  req: Request,
+  res: Response,
+) => {
+  const daoId = Number(req.query.daoId);
+  if (!Number.isInteger(daoId) || daoId < 1) {
+    res
+      .status(400)
+      .json({ error: "daoId is required and must be a positive integer" });
+    return;
+  }
+
+  try {
+    const limit = req.query.limit
+      ? Math.max(1, Math.min(Number(req.query.limit), 500))
+      : 50;
+    const offset = req.query.offset ? Math.max(0, Number(req.query.offset)) : 0;
+
+    const { events, total } = getEventsForDao(daoId, {
+      types: ["sbt_transfer_attempt"],
+      limit,
+      offset,
+    });
+
+    res.json({ daoId, attempts: events, total, limit, offset });
+  } catch (err) {
+    log("error", "admin_sbt_transfer_attempts_failed", {
+      daoId,
+      error: (err as Error).message,
+    });
+    res.status(500).json({ error: "Failed to fetch SBT transfer attempts" });
   }
 }) as AsyncHandler);
 

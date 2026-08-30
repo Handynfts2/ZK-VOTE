@@ -489,9 +489,21 @@ export const eventsQuerySchema = cursorPaginationSchema.extend({
   cursorField: z.enum(["id", "ledger", "timestamp"]).default("id"),
 });
 
-export const daosQuerySchema = limitOffsetPaginationSchema.extend({
-  user: stellarAddress.optional(),
-});
+/**
+ * `GET /daos` pages on limit/offset but advertises the next page as the opaque
+ * `pagination.cursor` string. Clients echo that value straight back, so `cursor`
+ * is accepted as an alias for `offset` and folded into it here; an unparseable
+ * cursor is rejected as a 400 rather than silently restarting from page one.
+ */
+export const daosQuerySchema = limitOffsetPaginationSchema
+  .extend({
+    user: stellarAddress.optional(),
+    cursor: z.coerce.number().int().min(0).optional(),
+  })
+  .transform(({ cursor, offset, ...rest }) => ({
+    ...rest,
+    offset: cursor ?? offset,
+  }));
 
 export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
   types: z

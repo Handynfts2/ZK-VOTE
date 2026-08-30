@@ -104,18 +104,73 @@
           "success"
         ]
       },
-      "DaosListResponse": {
+      "PaginatedResponse": {
         "type": "object",
         "properties": {
-          "daos": {
+          "data": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": {}
             }
           },
-          "total": {
-            "type": "number"
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "total": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "hasMore",
+              "total"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ]
+      },
+      "DaosListResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "total": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "hasMore",
+              "total"
+            ]
           },
           "lastSync": {
             "type": [
@@ -128,8 +183,8 @@
           }
         },
         "required": [
-          "daos",
-          "total",
+          "data",
+          "pagination",
           "lastSync",
           "cached"
         ]
@@ -316,15 +371,40 @@
                       "b",
                       "c"
                     ]
+                  },
+                  "nonce": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "integer"
+                  },
+                  "walletAddress": {
+                    "type": "string"
+                  },
+                  "encryptedPayload": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": {}
+                      }
+                    ]
+                  },
+                  "voterPublicKey": {
+                    "type": "string",
+                    "pattern": "^G[A-Z2-7]{55}$"
+                  },
+                  "voterSignature": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 },
                 "required": [
                   "daoId",
                   "proposalId",
-                  "choice",
-                  "nullifier",
-                  "root",
-                  "proof"
+                  "choice"
                 ]
               }
             }
@@ -743,7 +823,7 @@
         "tags": [
           "Comments"
         ],
-        "summary": "List comments for a proposal",
+        "summary": "List comments for a proposal (paginated)",
         "description": "Rate limit: queryLimiter.",
         "security": [],
         "parameters": [
@@ -766,6 +846,26 @@
             "required": true,
             "name": "proposalId",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "example": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "example": "eyJpIjoxMjN9"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
           }
         ],
         "responses": {
@@ -773,10 +873,15 @@
             "description": "Success",
             "content": {
               "application/json": {
-                "schema": {},
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                },
                 "example": {
-                  "comments": [],
-                  "total": 0
+                  "data": [],
+                  "pagination": {
+                    "hasMore": false,
+                    "total": 0
+                  }
                 }
               }
             }
@@ -1192,7 +1297,7 @@
         "tags": [
           "DAOs"
         ],
-        "summary": "List all cached DAOs, optionally with a user's membership role",
+        "summary": "List cached DAOs with pagination, optionally including user membership role",
         "description": "Rate limit: queryLimiter.",
         "security": [],
         "parameters": [
@@ -1205,6 +1310,39 @@
             "required": false,
             "name": "user",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Page size (default 100)",
+              "example": 100
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Rows to skip (default 0)",
+              "example": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Opaque cursor from a previous pagination.cursor; alias for offset",
+              "example": "100"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
           }
         ],
         "responses": {
@@ -1216,10 +1354,33 @@
                   "$ref": "#/components/schemas/DaosListResponse"
                 },
                 "example": {
-                  "daos": [],
-                  "total": 0,
+                  "data": [],
+                  "pagination": {
+                    "hasMore": false,
+                    "total": 0
+                  },
                   "lastSync": null,
                   "cached": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error (HTTP 400)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error (HTTP 500)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1673,7 +1834,7 @@
         "tags": [
           "Events"
         ],
-        "summary": "Get events for a DAO",
+        "summary": "Get events for a DAO with cursor-based pagination",
         "description": "Rate limit: queryLimiter.",
         "security": [],
         "parameters": [
@@ -1689,8 +1850,10 @@
           },
           {
             "schema": {
-              "type": "string",
-              "example": "50"
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "example": 100
             },
             "required": false,
             "name": "limit",
@@ -1699,10 +1862,10 @@
           {
             "schema": {
               "type": "string",
-              "example": "0"
+              "example": "eyJpIjoxMjN9"
             },
             "required": false,
-            "name": "offset",
+            "name": "cursor",
             "in": "query"
           },
           {
@@ -1713,6 +1876,50 @@
             "required": false,
             "name": "types",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "timestamp",
+                "ledger",
+                "type",
+                "verified",
+                "created_at"
+              ],
+              "example": "timestamp"
+            },
+            "required": false,
+            "name": "orderBy",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ASC",
+                "DESC"
+              ],
+              "example": "DESC"
+            },
+            "required": false,
+            "name": "orderDirection",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "ledger",
+                "timestamp"
+              ],
+              "example": "id"
+            },
+            "required": false,
+            "name": "cursorField",
+            "in": "query"
           }
         ],
         "responses": {
@@ -1720,11 +1927,15 @@
             "description": "Success",
             "content": {
               "application/json": {
-                "schema": {},
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                },
                 "example": {
-                  "events": [],
-                  "total": 0,
-                  "daoId": 0
+                  "data": [],
+                  "pagination": {
+                    "hasMore": false,
+                    "total": 0
+                  }
                 }
               }
             }
@@ -2325,6 +2536,96 @@
                   "total": 0,
                   "limit": 50,
                   "offset": 0
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error (HTTP 401)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error (HTTP 500)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/sbt-transfer-attempts": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Review flagged membership-SBT transfer/approval attempts for a DAO (admin only)",
+        "description": "Rate limit: queryLimiter.",
+        "security": [
+          {
+            "RelayerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "example": "1"
+            },
+            "required": true,
+            "name": "daoId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "example": "50"
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "example": "0"
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {},
+                "example": {
+                  "daoId": 1,
+                  "attempts": [],
+                  "total": 0,
+                  "limit": 50,
+                  "offset": 0
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error (HTTP 400)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

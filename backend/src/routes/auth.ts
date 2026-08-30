@@ -27,6 +27,7 @@ import {
   getAuditEntries,
   listTokensForClient,
 } from "../services/authTokens.js";
+import { buildDidAttributeProofSeed } from "../services/blindSignature.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
@@ -67,9 +68,52 @@ const auditQuerySchema = z.object({
     .transform((v) => Math.max(Number(v) || 0, 0)),
 });
 
+const didAttributeClaimSchema = z.object({
+  claim: z.object({
+    issuer: z.string().min(1).max(256),
+    subjectDid: z.string().min(1).max(512),
+    attributeKey: z.string().min(1).max(128),
+    attributeValue: z.number().int().nonnegative(),
+    issuedAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().nonnegative(),
+    signature: z.string().min(1).max(4096),
+  }),
+  minAttributeValue: z.number().int().nonnegative(),
+});
+
 // ============================================
 // TOKEN MANAGEMENT ENDPOINTS
 // ============================================
+
+/**
+ * POST /auth/did-attribute-proof-seed - Prepare ZK attribute proof inputs
+ * from an issuer-signed DID/eSIM claim.
+ * Requires: AUTH_MASTER_KEY
+ */
+router.post(
+  "/auth/did-attribute-proof-seed",
+  bodyLimit("100kb"),
+  masterKeyGuard,
+  validateBody(didAttributeClaimSchema),
+  (async (req: Request, res: Response) => {
+    const { claim, minAttributeValue } = req.body as z.infer<
+      typeof didAttributeClaimSchema
+    >;
+
+    try {
+      const seed = buildDidAttributeProofSeed(claim, minAttributeValue);
+      return res.status(200).json({
+        success: true,
+        seed,
+      });
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: (err as Error).message,
+      });
+    }
+  }) as AsyncHandler,
+);
 
 /**
  * POST /auth/tokens - Create a new authentication token

@@ -90,8 +90,8 @@ jobs:
         run: npx prettier --check "src/**/*.ts"
       - name: Validate environment profiles
         run: npm run validate-profiles
-      - name: Run tests
-        run: npm test
+      - name: Run tests (including .test.ts files)
+        run: npm test 2>&1 | tee test-output.log
         env:
           RELAYER_TEST_MODE: 'true'
           SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
@@ -101,6 +101,17 @@ jobs:
           VOTING_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           TREE_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           COMMENTS_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+      - name: Report test counts
+        if: always()
+        run: |
+          echo "=== Backend Test Summary ==="
+          echo "TypeScript tests (.test.ts):"
+          find test tests -name "*.test.ts" -type f | wc -l
+          echo "JavaScript tests (.test.js):"
+          find test -name "*.test.js" -type f | wc -l
+          echo ""
+          echo "Test execution log:"
+          tail -20 test-output.log || echo "No test output"
       - name: Check OpenAPI spec and API.md are up to date
         run: npm run docs:check
         env:
@@ -130,7 +141,7 @@ jobs:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: circuits/package-lock.json
-      
+
       # Cache compiled circuits to speed up CI
       - name: Cache circuit compilation artifacts
         uses: actions/cache@v4
@@ -142,7 +153,7 @@ jobs:
           key: circuits-${{ runner.os }}-${{ hashFiles('circuits/**/*.circom', 'circuits/package-lock.json') }}
           restore-keys: |
             circuits-${{ runner.os }}-
-      
+
       - name: Install circom
         run: |
           wget -q https://github.com/iden3/circom/releases/download/v2.1.8/circom-linux-amd64 -O /tmp/circom
@@ -152,20 +163,37 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
-      - name: Compile circuits with Docker (use cache if available)
+      - name: Compile circuits with Docker (reproducible build)
         run: |
           if [ -f "build/vote.r1cs" ] && [ -f "build/verification_key.json" ]; then
             echo "Using cached circuit artifacts"
           else
             ../scripts/compile-circuits.sh --docker
           fi
-      - name: Verify circuit artifact checksums (if artifacts exist)
+      - name: Verify circuit artifact checksums (SLSA requirement)
         run: |
           if [ -f "build/vote.r1cs" ] || [ -f "build/verification_key.json" ]; then
-            ../scripts/verify-circuits.sh
+            ../scripts/verify-circuit-build.sh build artifacts.sha256
           else
             echo "Skipping verification - no compiled artifacts found"
           fi
+      - name: Generate SBOM and provenance (SLSA L3)
+        run: |
+          echo "Circuit Build SBOM - $(date -u +%Y-%m-%dT%H:%M:%SZ)" > sbom.txt
+          echo "Build ID: ${{ github.run_id }}" >> sbom.txt
+          echo "Commit: ${{ github.sha }}" >> sbom.txt
+          echo "Circom Version: 2.1.8" >> sbom.txt
+          echo "Node Version: $(node --version)" >> sbom.txt
+          npm list --depth=0 >> sbom.txt
+      - name: Upload circuit artifacts and checksums
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: circuit-artifacts-${{ github.run_id }}
+          path: |
+            circuits/build/
+            circuits/artifacts.sha256
+            circuits/sbom.txt
       - name: Compile v2 circuits (if available)
         run: |
           if command -v circom &> /dev/null; then

@@ -282,3 +282,59 @@ fn test_self_join_twice_fails() {
     client.self_join(&2u64, &new_member, &None);
     client.self_join(&2u64, &new_member, &None); // Should panic
 }
+
+// ── Soulbound guarantee: transfer/approval attempts always reject (#357) ──
+
+#[test]
+fn test_transfer_is_rejected() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+    client.mint(&1u64, &member, &admin, &None);
+
+    let recipient = Address::generate(&env);
+    let result = client.try_transfer(&1u64, &member, &recipient, &1i128);
+
+    assert!(result.is_err());
+    // The soulbound invariant holds: nothing moved.
+    assert!(client.has(&1u64, &member));
+    assert!(!client.has(&1u64, &recipient));
+}
+
+#[test]
+fn test_transfer_from_is_rejected() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+    client.mint(&1u64, &member, &admin, &None);
+
+    let spender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let result = client.try_transfer_from(&1u64, &spender, &member, &recipient, &1i128);
+
+    assert!(result.is_err());
+    assert!(client.has(&1u64, &member));
+}
+
+#[test]
+fn test_approve_is_rejected() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+    client.mint(&1u64, &member, &admin, &None);
+
+    let spender = Address::generate(&env);
+    let result = client.try_approve(&1u64, &member, &spender, &1i128, &1000u32);
+
+    assert!(result.is_err());
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_transfer_panics_even_without_an_existing_membership() {
+    // The reject-trap fires before any membership lookup: an address that
+    // was never minted an SBT still can't "transfer" one.
+    let (env, sbt_id, _, _, _) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    let stranger = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.transfer(&1u64, &stranger, &recipient, &1i128);
+}

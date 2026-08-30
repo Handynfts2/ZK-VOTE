@@ -59,6 +59,10 @@ import {
 import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 import {
+  startSbtTransferWatch,
+  stopSbtTransferWatch,
+} from "./services/sbt-guard.js";
+import {
   startAuthScheduler,
   stopAuthScheduler,
   ensureLegacyTokenMigrated,
@@ -487,6 +491,7 @@ async function startBackgroundServices(): Promise<void> {
       isValidContractId(config.membershipSbtContractId)
     ) {
       startMembershipSync();
+      startSbtTransferWatch();
     }
   }
 
@@ -528,6 +533,7 @@ function stopBackgroundServices(): void {
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
+  stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
 }

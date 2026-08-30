@@ -52,7 +52,9 @@ const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
 const CIRCUIT_REGISTRY: Symbol = symbol_short!("circ_reg");
 const VERSION: u32 = 2;
+const STORAGE_VERSION: u32 = 1;
 const VERSION_KEY: Symbol = symbol_short!("ver");
+const STORAGE_VERSION_KEY: Symbol = symbol_short!("stor_ver");
 
 // TTL management: bump on every interaction to keep contract alive
 const INSTANCE_TTL_THRESHOLD: u32 = 120_960; // ~7 days
@@ -132,6 +134,9 @@ pub enum VotingError {
     QvTallyLengthMismatch = 54,
     /// Candidate index >= numCandidates configured for this election
     InvalidCandidateIndex = 65,
+    UpgradeVersionMismatch = 66,
+    StorageVersionDowngrade = 67,
+    UpgradePayloadTooLarge = 68,
     /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
     ReentrantCall = 56,
     /// VDF proof verification failed
@@ -162,6 +167,7 @@ const MAX_IC_LENGTH: u32 = 21;
 // Size limits to prevent DoS attacks
 const MAX_TITLE_LEN: u32 = 100; // Max proposal title length (100 bytes)
 const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
+const MAX_UPGRADE_PAYLOAD_LEN: u32 = 4096;
 
 // Circuit constants
 /// Vote circuit public signals: root, nullifier, dao_id, proposal_id, vote_choice, num_candidates
@@ -269,6 +275,10 @@ pub enum DataKey {
     TallyProof(u64, u64), // (dao_id, proposal_id) -> Bytes (proof)
     /// Merkle root update history for auditability
     MerkleRootHistory(u64, u64), // (dao_id, proposal_id) -> Vec<MerkleRootRecord>
+    /// Applied contract migration by target contract version.
+    UpgradeMigration(u32),
+    /// Rollback marker by rolled-back contract version.
+    UpgradeRollback(u32),
 }
 
 /// A single quadratic-voting ballot as stored on-chain.
@@ -301,6 +311,25 @@ pub struct MigrationInfo {
     pub old_circuit_id: String,
     pub new_circuit_id: String,
     pub deadline: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StorageLayoutInfo {
+    pub contract_version: u32,
+    pub storage_version: u32,
+    pub latest_migration_at: u64,
+    pub rollback_to_version: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContractMigrationInfo {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub storage_version: u32,
+    pub payload_hash: BytesN<32>,
+    pub applied_at: u64,
 }
 
 #[contracttype]
@@ -470,6 +499,22 @@ pub struct ContractUpgraded {
 
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
+pub struct StorageMigratedEvent {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub storage_version: u32,
+    pub payload_hash: BytesN<32>,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractRollbackEvent {
+    pub from: u32,
+    pub to: u32,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractPausedEvent {
     pub guardian: Address,
     pub paused_at: u64,
@@ -606,6 +651,9 @@ impl Voting {
 
         // Record contract version and emit upgrade event for observability
         env.storage().instance().set(&VERSION_KEY, &VERSION);
+        env.storage()
+            .instance()
+            .set(&STORAGE_VERSION_KEY, &STORAGE_VERSION);
         ContractUpgraded {
             from: 0,
             to: VERSION,
@@ -627,6 +675,11 @@ impl Voting {
         if &configured != guardian {
             panic_with_error!(env, VotingError::NotGuardian);
         }
+    }
+
+    fn require_registry(env: &Env) {
+        let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
+        registry.require_auth();
     }
 
     fn require_not_paused(env: &Env) {
@@ -665,6 +718,136 @@ impl Voting {
     pub fn guardian(env: Env) -> Address {
         Self::bump_instance(&env);
         env.storage().instance().get(&DataKey::Guardian).unwrap()
+    }
+
+    /// Current persistent storage layout version.
+    pub fn storage_version(env: Env) -> u32 {
+        Self::bump_instance(&env);
+        env.storage()
+            .instance()
+            .get(&STORAGE_VERSION_KEY)
+            .unwrap_or(STORAGE_VERSION)
+    }
+
+    /// Version negotiation metadata for clients before submitting transactions.
+    pub fn storage_layout(env: Env) -> StorageLayoutInfo {
+        Self::bump_instance(&env);
+        let contract_version = Self::version(env.clone());
+        let storage_version = Self::storage_version(env.clone());
+        let latest_migration = env
+            .storage()
+            .persistent()
+            .get(&DataKey::UpgradeMigration(contract_version));
+
+        StorageLayoutInfo {
+            contract_version,
+            storage_version,
+            latest_migration_at: latest_migration
+                .map(|info: ContractMigrationInfo| info.applied_at)
+                .unwrap_or(0),
+            rollback_to_version: env
+                .storage()
+                .persistent()
+                .get(&DataKey::UpgradeRollback(contract_version)),
+        }
+    }
+
+    /// Return a migration record by upgraded contract version.
+    pub fn migration_for_version(env: Env, version: u32) -> Option<ContractMigrationInfo> {
+        Self::bump_instance(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::UpgradeMigration(version))
+    }
+
+    /// Registry-gated upgrade entrypoint.
+    ///
+    /// The registry enforces DAO-admin governance and the timelock. This hook
+    /// verifies the expected current version, records storage migration
+    /// metadata, then swaps this contract's Wasm.
+    pub fn apply_upgrade_from_registry(
+        env: Env,
+        wasm_hash: BytesN<32>,
+        from_version: u32,
+        to_version: u32,
+        storage_version: u32,
+        migration_payload: Bytes,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_registry(&env);
+
+        let current_version = Self::version(env.clone());
+        if current_version != from_version || to_version <= from_version {
+            panic_with_error!(&env, VotingError::UpgradeVersionMismatch);
+        }
+        let current_storage_version = Self::storage_version(env.clone());
+        if storage_version < current_storage_version {
+            panic_with_error!(&env, VotingError::StorageVersionDowngrade);
+        }
+        if migration_payload.len() > MAX_UPGRADE_PAYLOAD_LEN {
+            panic_with_error!(&env, VotingError::UpgradePayloadTooLarge);
+        }
+
+        let payload_hash: BytesN<32> = env.crypto().sha256(&migration_payload).into();
+        env.storage().instance().set(&VERSION_KEY, &to_version);
+        env.storage()
+            .instance()
+            .set(&STORAGE_VERSION_KEY, &storage_version);
+
+        let migration = ContractMigrationInfo {
+            from_version,
+            to_version,
+            storage_version,
+            payload_hash: payload_hash.clone(),
+            applied_at: env.ledger().timestamp(),
+        };
+        let key = DataKey::UpgradeMigration(to_version);
+        env.storage().persistent().set(&key, &migration);
+        Self::bump_persistent(&env, &key);
+
+        StorageMigratedEvent {
+            from_version,
+            to_version,
+            storage_version,
+            payload_hash,
+        }
+        .publish(&env);
+        ContractUpgraded {
+            from: from_version,
+            to: to_version,
+        }
+        .publish(&env);
+
+        env.deployer().update_current_contract_wasm(wasm_hash);
+    }
+
+    /// Registry-gated rollback entrypoint using a pre-approved rollback Wasm.
+    pub fn rollback_upgrade_from_registry(
+        env: Env,
+        wasm_hash: BytesN<32>,
+        from_version: u32,
+        to_version: u32,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_registry(&env);
+
+        let current_version = Self::version(env.clone());
+        if current_version != from_version || to_version >= from_version {
+            panic_with_error!(&env, VotingError::UpgradeVersionMismatch);
+        }
+
+        env.storage().instance().set(&VERSION_KEY, &to_version);
+        let key = DataKey::UpgradeRollback(from_version);
+        env.storage().persistent().set(&key, &to_version);
+        Self::bump_persistent(&env, &key);
+
+        ContractRollbackEvent {
+            from: from_version,
+            to: to_version,
+        }
+        .publish(&env);
+
+        env.deployer().update_current_contract_wasm(wasm_hash);
     }
 
     pub fn pause(env: Env, guardian: Address) {

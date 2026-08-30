@@ -7,9 +7,7 @@ import express from "express";
 import request from "supertest";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-const tempDir = fs.mkdtempSync(
-  path.join(os.tmpdir(), "zkvote-health-ttl-"),
-);
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "zkvote-health-ttl-"));
 const dbPath = path.join(tempDir, "health.db");
 
 process.env.RELAYER_TEST_MODE = "true";
@@ -29,14 +27,9 @@ process.env.SOROBAN_RPC_URL = "http://127.0.0.1:1";
 process.env.NETWORK_PASSPHRASE = "Test";
 
 const { config } = await import("../src/config.js");
-const {
-  default: healthRouter,
-  initHealthRoutes,
-} = await import("../src/routes/health.js");
-const {
-  initDb,
-  closeDb,
-} = await import("../src/services/db.js");
+const { default: healthRouter, initHealthRoutes } =
+  await import("../src/routes/health.js");
+const { initDb, closeDb } = await import("../src/services/db.js");
 const ttlChecker = await import("../src/services/ttl-checker.js");
 
 const originalConfig = {
@@ -73,12 +66,12 @@ test("health reports an uninitialised RPC without exposing details", async () =>
   const response = await request(app).get("/health");
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.body.status, "ok");
+  // An unavailable RPC marks the "soroban_rpc" service unavailable, which
+  // flips overall status to "degraded" per the graceful-degradation
+  // behavior in routes/health.ts (process stays up, but callers are told).
+  assert.equal(response.body.status, "degraded");
   assert.equal(response.body.rpc.ok, false);
-  assert.match(
-    response.body.rpc.error,
-    /RPC server not initialized/,
-  );
+  assert.match(response.body.rpc.error, /RPC server not initialized/);
   assert.equal(response.body.relayer, undefined);
   assert.equal(typeof response.body.db, "object");
 });
@@ -93,9 +86,7 @@ test("health exposes details for an authenticated healthy RPC", async () => {
     "GHEALTHRELAYER000000000000000000000000000000000000000000",
   );
 
-  const response = await request(app)
-    .get("/health")
-    .set(auth);
+  const response = await request(app).get("/health").set(auth);
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.rpc.ok, true);
@@ -103,14 +94,8 @@ test("health exposes details for an authenticated healthy RPC", async () => {
     response.body.relayer,
     "GHEALTHRELAYER000000000000000000000000000000000000000000",
   );
-  assert.equal(
-    response.body.votingContract,
-    config.votingContractId,
-  );
-  assert.equal(
-    response.body.treeContract,
-    config.treeContractId,
-  );
+  assert.equal(response.body.votingContract, config.votingContractId);
+  assert.equal(response.body.treeContract, config.treeContractId);
 });
 
 test("readiness rejects an offline RPC", async () => {
@@ -164,9 +149,7 @@ test("readiness accepts online RPC and exposes authenticated details", async () 
   assert.equal(response.body.status, "ready");
   assert.equal(response.body.relayer, undefined);
 
-  response = await request(app)
-    .get("/ready")
-    .set(auth);
+  response = await request(app).get("/ready").set(auth);
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.status, "ready");
@@ -180,26 +163,11 @@ test("public configuration returns backend contract settings", async () => {
   const response = await request(app).get("/config");
 
   assert.equal(response.statusCode, 200);
-  assert.equal(
-    response.body.votingContract,
-    config.votingContractId,
-  );
-  assert.equal(
-    response.body.treeContract,
-    config.treeContractId,
-  );
-  assert.equal(
-    response.body.commentsContract,
-    config.commentsContractId,
-  );
-  assert.equal(
-    response.body.networkPassphrase,
-    config.networkPassphrase,
-  );
-  assert.equal(
-    typeof response.body.ipfsEnabled,
-    "boolean",
-  );
+  assert.equal(response.body.votingContract, config.votingContractId);
+  assert.equal(response.body.treeContract, config.treeContractId);
+  assert.equal(response.body.commentsContract, config.commentsContractId);
+  assert.equal(response.body.networkPassphrase, config.networkPassphrase);
+  assert.equal(typeof response.body.ipfsEnabled, "boolean");
 });
 
 test("database statistics hide diagnostics without authentication", async () => {
@@ -211,9 +179,7 @@ test("database statistics hide diagnostics without authentication", async () => 
 });
 
 test("database statistics expose diagnostics with authentication", async () => {
-  const response = await request(app)
-    .get("/db/stats")
-    .set(auth);
+  const response = await request(app).get("/db/stats").set(auth);
 
   assert.equal(response.statusCode, 200);
   assert.equal(typeof response.body, "object");
@@ -221,17 +187,14 @@ test("database statistics expose diagnostics with authentication", async () => {
 });
 
 test("persistent TTL fallback returns a healthy untracked estimate", async () => {
-  const contractId = StellarSdk.StrKey.encodeContract(
-    Buffer.alloc(32, 24),
-  );
+  const contractId = StellarSdk.StrKey.encodeContract(Buffer.alloc(32, 24));
 
-  const info =
-    await ttlChecker.queryPersistentTTLWithFallback(
-      contractId,
-      7,
-      "current_root",
-      "ttl-test-entry",
-    );
+  const info = await ttlChecker.queryPersistentTTLWithFallback(
+    contractId,
+    7,
+    "current_root",
+    "ttl-test-entry",
+  );
 
   assert.equal(info.entryId, "ttl-test-entry");
   assert.equal(info.contractId, contractId);
@@ -265,8 +228,5 @@ test("TTL helper decisions cover healthy, warning and grace states", () => {
   assert.equal(ttlChecker.isInGracePeriod(healthy), false);
   assert.equal(ttlChecker.isInGracePeriod(grace), true);
 
-  assert.equal(
-    ttlChecker.formatRemaining(grace),
-    "1d 1h",
-  );
+  assert.equal(ttlChecker.formatRemaining(grace), "1d 1h");
 });
