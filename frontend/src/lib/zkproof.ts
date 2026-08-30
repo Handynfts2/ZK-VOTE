@@ -15,6 +15,12 @@
 // (Rust→WASM) it is never loaded. `CircuitSignals` is used only as a type.
 import type { CircuitSignals, Groth16Proof } from "snarkjs";
 
+// Shared BN254 field/nullifier validation helpers (#370)
+import {
+  assertValidFieldElement,
+  assertValidNullifier,
+} from "../types/index";
+
 // Default to the Rust prover. Force the legacy `snarkjs` prover by setting
 // `VITE_ZK_USE_RUST_PROVER=false` (Vite) or `ZK_USE_RUST_PROVER=false`
 // (Node/tests). The value is read once at module load.
@@ -234,6 +240,11 @@ export async function generateVoteProof(
         console.warn("Rust vote prover failed; falling back to snarkjs.", e);
       }
     }
+
+    // Validate public signals before proof generation (#370)
+    // Prevents malformed values from causing hard-to-diagnose WASM errors.
+    assertValidNullifier(input.nullifier);
+    assertValidFieldElement(input.root, "root");
 
     // Fallback path: load `snarkjs` dynamically so it is NOT part of the
     // default (Rust) production bundle.
