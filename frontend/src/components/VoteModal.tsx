@@ -24,10 +24,7 @@ import {
   getZKCredentials,
   storeZKCredentials,
 } from "../lib/zk";
-import {
-  assertValidFieldElement,
-  assertValidNullifier,
-} from "../types/index";
+import { assertValidFieldElement, assertValidNullifier } from "../types/index";
 import { CheckCircle, XCircle, AlertTriangle, Loader2, X } from "lucide-react";
 import { useReceipts } from "../hooks/useReceipts";
 
@@ -470,7 +467,10 @@ export default function VoteModal({
               <div className="border border-yellow-500/40 rounded-lg p-3 bg-yellow-500/5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0" aria-hidden="true" />
+                    <AlertTriangle
+                      className="h-4 w-4 text-yellow-500 shrink-0"
+                      aria-hidden="true"
+                    />
                     <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-400">
                       Coercion-resistant mode
                     </span>
@@ -479,12 +479,12 @@ export default function VoteModal({
                     type="button"
                     role="switch"
                     aria-checked={panicMode}
-                    aria-label={panicMode ? "Disable panic mode" : "Enable panic mode"}
+                    aria-label={
+                      panicMode ? "Disable panic mode" : "Enable panic mode"
+                    }
                     onClick={() => setPanicMode((prev) => !prev)}
                     className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-500 ${
-                      panicMode
-                        ? "bg-yellow-500"
-                        : "bg-muted"
+                      panicMode ? "bg-yellow-500" : "bg-muted"
                     }`}
                     data-testid="panic-mode-toggle"
                   >
@@ -507,9 +507,10 @@ export default function VoteModal({
                       ⚠ Panic mode is ON — decoy credentials will be used
                     </p>
                     <p className="text-xs text-yellow-600 dark:text-yellow-300">
-                      Your vote will appear valid but will NOT be recorded on-chain. Your real
-                      credentials are never touched. You can cast your real vote after the
-                      coercive situation ends by disabling this mode.
+                      Your vote will appear valid but will NOT be recorded
+                      on-chain. Your real credentials are never touched. You can
+                      cast your real vote after the coercive situation ends by
+                      disabling this mode.
                     </p>
                   </div>
                 )}

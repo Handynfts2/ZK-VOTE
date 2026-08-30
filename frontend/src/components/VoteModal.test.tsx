@@ -412,9 +412,8 @@ describe("VoteModal panic-mode (coercion resistance, issue #337)", () => {
   });
 
   it("calls generateFakeZKCredentials (not real) when panic mode is on", async () => {
-    const { generateFakeZKCredentials, getZKCredentials } = await import(
-      "../lib/zk"
-    );
+    const { generateFakeZKCredentials, getZKCredentials } =
+      await import("../lib/zk");
 
     renderWithQueryClient(<VoteModal {...defaultProps} />);
 
@@ -444,7 +443,9 @@ describe("VoteModal panic-mode (coercion resistance, issue #337)", () => {
     fireEvent.click(screen.getByText("Vote Yes"));
 
     await vi.waitFor(() => {
-      expect(screen.queryByText(/Vote Submitted|Generating|Submitting/)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Vote Submitted|Generating|Submitting/),
+      ).toBeInTheDocument();
     });
 
     // getZKCredentials was never called (real creds untouched)
