@@ -16,10 +16,7 @@
 import type { CircuitSignals, Groth16Proof } from "snarkjs";
 
 // Shared BN254 field/nullifier validation helpers (#370)
-import {
-  assertValidFieldElement,
-  assertValidNullifier,
-} from "../types/index";
+import { assertValidFieldElement, assertValidNullifier } from "../types/index";
 
 // Default to the Rust prover. Force the legacy `snarkjs` prover by setting
 // `VITE_ZK_USE_RUST_PROVER=false` (Vite) or `ZK_USE_RUST_PROVER=false`

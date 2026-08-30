@@ -59,11 +59,19 @@ describe("isValidFieldElement", () => {
   });
 
   it("accepts a valid hex string (no 0x prefix)", () => {
-    expect(isValidFieldElement("0000000000000000000000000000000000000000000000000000000000000001")).toBe(true);
+    expect(
+      isValidFieldElement(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+      ),
+    ).toBe(true);
   });
 
   it("accepts a valid hex string (with 0x prefix)", () => {
-    expect(isValidFieldElement("0x0000000000000000000000000000000000000000000000000000000000000001")).toBe(true);
+    expect(
+      isValidFieldElement(
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+      ),
+    ).toBe(true);
   });
 
   it("rejects a hex string representing modulus", () => {
@@ -148,7 +156,7 @@ describe("assertValidNullifier", () => {
   });
 
   it("does not throw for valid non-zero hex string", () => {
-    const validHex = "0x" + (42n).toString(16);
+    const validHex = "0x" + 42n.toString(16);
     expect(() => assertValidNullifier(validHex)).not.toThrow();
   });
 
@@ -180,7 +188,9 @@ describe("validation helper integration scenarios", () => {
     const poseidonOutput = BigInt(
       "7954706103551041561249684479736668012193906399571749143399785267862256340516",
     );
-    expect(() => assertValidFieldElement(poseidonOutput, "commitment")).not.toThrow();
+    expect(() =>
+      assertValidFieldElement(poseidonOutput, "commitment"),
+    ).not.toThrow();
   });
 
   it("rejects nullifier zero regardless of representation", () => {
