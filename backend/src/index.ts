@@ -100,6 +100,7 @@ import {
   novaRoutes,
   adminRoutes,
   thresholdRoutes,
+  randomnessRoutes,
 } from "./routes/index.js";
 import { registerShutdownHandler } from "./routes/admin.js";
 
@@ -248,6 +249,7 @@ app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
 app.use(noStore, adminRoutes);
 app.use(noStore, thresholdRoutes);
+app.use(noStore, randomnessRoutes);
 
 // ============================================
 // API VERSIONING (#139)
@@ -279,6 +281,7 @@ v1Router.use(circuitRoutes);
 v1Router.use(quadraticRoutes);
 v1Router.use(noStore, adminRoutes);
 v1Router.use(noStore, thresholdRoutes);
+v1Router.use(noStore, randomnessRoutes);
 app.use("/api/v1", v1Router);
 
 // OpenAPI spec + interactive docs
