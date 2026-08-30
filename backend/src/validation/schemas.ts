@@ -489,30 +489,21 @@ export const eventsQuerySchema = cursorPaginationSchema.extend({
   cursorField: z.enum(["id", "ledger", "timestamp"]).default("id"),
 });
 
-export const daosQuerySchema = limitOffsetPaginationSchema.extend({
-  user: stellarAddress.optional(),
-  /** Free-text search against DAO name (case-insensitive substring match) */
-  search: z.string().min(1).max(100).optional(),
-  /** Filter by membership type: open | closed */
-  membershipType: z.enum(["open", "closed"]).optional(),
-});
-
-// ============================================
-// PROPOSAL SEARCH / FILTER SCHEMA (issue #377)
-// ============================================
-
 /**
- * Query-string schema for the GET /proposals/:daoId endpoint.
- *
- * - `status`  : filter by proposal lifecycle state (active / closed / all)
- * - `search`  : free-text substring match on proposal title stored in event data
- * - `limit`   : page size (1 – 500, default 100)
- * - `offset`  : zero-based page start
+ * `GET /daos` pages on limit/offset but advertises the next page as the opaque
+ * `pagination.cursor` string. Clients echo that value straight back, so `cursor`
+ * is accepted as an alias for `offset` and folded into it here; an unparseable
+ * cursor is rejected as a 400 rather than silently restarting from page one.
  */
-export const proposalsQuerySchema = limitOffsetPaginationSchema.extend({
-  status: z.enum(["active", "closed", "all"]).default("all"),
-  search: z.string().min(1).max(100).optional(),
-});
+export const daosQuerySchema = limitOffsetPaginationSchema
+  .extend({
+    user: stellarAddress.optional(),
+    cursor: z.coerce.number().int().min(0).optional(),
+  })
+  .transform(({ cursor, offset, ...rest }) => ({
+    ...rest,
+    offset: cursor ?? offset,
+  }));
 
 export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
   types: z

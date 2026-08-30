@@ -19,7 +19,8 @@ include "merkle_tree.circom";
 //
 // parentCommentId enables reply threading: comments can reference a parent
 // comment for nested discussion. 0 = top-level comment.
-\n    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+template CommentV2(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)

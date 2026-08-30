@@ -993,6 +993,54 @@ Paginated audit log review.
 }
 ```
 
+### GET /admin/sbt-transfer-attempts
+
+Review flagged membership-SBT transfer/approval attempts for a DAO (#357).
+
+The membership-sbt contract always rejects `transfer`/`transfer_from`/`approve`
+(soulbound). `services/sbt-guard.ts` detects the attempt from the transaction
+envelope regardless of on-chain success/failure and records it as an
+`sbt_transfer_attempt` event.
+
+**Authentication:** Yes
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Query Parameters
+
+| Param    | Type     | Default | Description                        |
+|----------|----------|---------|-------------------------------------|
+| `daoId`  | `number` | -       | Required. The DAO to review.        |
+| `limit`  | `number` | 50      | Max rows to return (capped at 500)  |
+| `offset` | `number` | 0       | Pagination offset                   |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 1,
+  "attempts": [
+    {
+      "id": 7,
+      "dao_id": 1,
+      "type": "sbt_transfer_attempt",
+      "data": { "functionNames": ["transfer"], "successful": false },
+      "ledger": 123456,
+      "tx_hash": "abcd...",
+      "timestamp": "2026-08-30T00:00:00.000Z",
+      "verified": true
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+#### Errors
+
+- `400` - `daoId` is missing or not a positive integer
+- `401` - Missing/invalid auth token
+
 ---
 
 ## IPFS

@@ -184,6 +184,14 @@ const envSchema = z.object({
   TTL_MAX_FEE: z.string().default("1000000"),
   TTL_SLIPPAGE_LEDGERS: z.coerce.number().int().positive().default(8640),
 
+  // Membership SBT transfer-attempt monitoring (#357)
+  SBT_TRANSFER_WATCH_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(300000), // 5 minutes
+  ADMIN_ALERT_WEBHOOK_URL: z.string().url().optional(),
+
   BACKUP_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
   BACKUP_S3_BUCKET: z.string().optional(),
   S3_BUCKET: z.string().optional(),
@@ -457,6 +465,10 @@ export const config = {
   ttlCostTrackingEnabled: validatedEnv.TTL_COST_TRACKING_ENABLED,
   ttlMaxFee: validatedEnv.TTL_MAX_FEE,
   ttlSlippageLedgers: validatedEnv.TTL_SLIPPAGE_LEDGERS,
+
+  // Membership SBT transfer-attempt monitoring (#357)
+  sbtTransferWatchIntervalMs: validatedEnv.SBT_TRANSFER_WATCH_INTERVAL_MS,
+  adminAlertWebhookUrl: validatedEnv.ADMIN_ALERT_WEBHOOK_URL,
 
   // Backup & Archival
   backupIntervalMs: validatedEnv.BACKUP_INTERVAL_MS,
