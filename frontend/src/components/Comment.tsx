@@ -26,7 +26,7 @@ import {
   uploadCommentContent,
   editComment,
 } from "../lib/comments";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 
 interface CommentProps {
   comment: CommentWithContent;
@@ -77,7 +77,7 @@ export default function Comment({
   // Initialize contract clients when needed (memoized for performance)
   const contractClients = useMemo(() => {
     if (!publicKey) return null;
-    return initializeContractClients(publicKey);
+    return getZkVoteClient(publicKey);
   }, [publicKey]);
 
   const isOwnPublicComment = comment.author === publicKey;
