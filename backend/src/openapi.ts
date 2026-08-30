@@ -625,6 +625,154 @@ export const ENDPOINTS: EndpointDef[] = [
       availableCircuits: [],
     },
   },
+  // ---- Proposal search (#377) ----
+  {
+    method: "get",
+    path: "/proposals/:daoId",
+    tag: "DAOs",
+    summary: "Search and filter proposals for a DAO",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    query: {
+      status: z
+        .enum(["active", "closed", "all"])
+        .optional()
+        .openapi({ example: "active" }),
+      search: z
+        .string()
+        .optional()
+        .openapi({ example: "fund development" }),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 20 }),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .openapi({ example: 0 }),
+    },
+    responseExample: {
+      data: [
+        {
+          proposalId: 1,
+          title: "Fund development",
+          endTime: 1900000000,
+          closed: false,
+          txHash: null,
+          timestamp: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+      pagination: { cursor: undefined, hasMore: false, total: 1 },
+      filters: { status: "active", search: "fund" },
+    },
+  },
+  // ---- VDF + Threshold Randomness (#310) ----
+  {
+    method: "post",
+    path: "/randomness/seed",
+    tag: "Randomness",
+    summary: "Compute VDF seed for proposal ordering (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      vdfInput: "a1b2c3d4e5f6...",
+      vdfOutput: "f6e5d4c3b2a1...",
+      iterations: 100000,
+      replayNonce: "deadbeef...",
+      checkpointCount: 16,
+      requiredShares: 2,
+      sharesReceived: 0,
+      status: "awaiting_shares",
+    },
+    errorStatuses: [400, 401, 409, 500],
+  },
+  {
+    method: "post",
+    path: "/randomness/contribute",
+    tag: "Randomness",
+    summary: "Submit a threshold-RNG share (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      authorityId: "authority-1",
+      sharesReceived: 1,
+      requiredShares: 2,
+      ready: false,
+      status: "awaiting_shares",
+    },
+    errorStatuses: [400, 401, 404, 409, 500],
+  },
+  {
+    method: "post",
+    path: "/randomness/finalize",
+    tag: "Randomness",
+    summary: "Finalize ordering from VDF + threshold shares (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      ordering: [3, 1, 2],
+      combinedSeed: "a1b2c3d4...",
+      replayNonce: "deadbeef...",
+      finalizedAt: 1722300000000,
+      status: "finalized",
+    },
+    errorStatuses: [400, 401, 404, 500],
+  },
+  {
+    method: "get",
+    path: "/randomness/ordering/:daoId",
+    tag: "Randomness",
+    summary: "Fetch the committed proposal ordering for a DAO",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    responseExample: {
+      daoId: 1,
+      ordering: [3, 1, 2],
+      proposalIds: [1, 2, 3],
+      replayNonce: "deadbeef...",
+      vdfIterations: 100000,
+      checkpointCount: 16,
+      sharesUsed: 2,
+      finalizedAt: 1722300000000,
+      committed: true,
+      status: "finalized",
+    },
+    errorStatuses: [404, 500],
+  },
+  {
+    method: "get",
+    path: "/randomness/verify/:daoId",
+    tag: "Randomness",
+    summary: "Verify the stored proposal ordering is reproducible",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    responseExample: {
+      daoId: 1,
+      valid: true,
+      checks: {
+        vdfOutputValid: true,
+        replayNonceValid: true,
+        orderingValid: true,
+      },
+      replayNonce: "deadbeef...",
+      finalizedAt: 1722300000000,
+    },
+    errorStatuses: [404, 500],
+  },
   // ---- Admin ----
   {
     method: "get",
