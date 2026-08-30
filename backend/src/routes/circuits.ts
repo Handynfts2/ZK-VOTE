@@ -7,23 +7,7 @@ import {
   getDaoCurrentCircuit,
 } from "../services/circuit-registry.js";
 import { queryLimiter, validateParams } from "../middleware/index.js";
-import { z } from "zod";
-
-// Circuit parameters schema
-export const circuitParamsSchema = z.object({
-  dao: z
-    .string()
-    .pipe(
-      z.coerce
-        .number()
-        .positive("Must be a positive integer")
-        .int("Must be an integer")
-        .max(Number.MAX_SAFE_INTEGER, "Value too large"),
-    ),
-  type: z.enum(["comment", "vote"], {
-    errorMap: () => ({ message: "Type must be either 'comment' or 'vote'" }),
-  }),
-});
+import { circuitParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();

@@ -2,8 +2,8 @@
  * OpenAPI 3.1 Specification Builder
  *
  * Builds the API's OpenAPI document from the same Zod schemas used to
- * validate requests at runtime (validation/schemas.ts and a couple of
- * route-local schemas), plus a compact per-endpoint metadata table below.
+ * validate requests at runtime (all centralized in validation/schemas.ts),
+ * plus a compact per-endpoint metadata table below.
  * That table is also the source `scripts/generate-openapi.ts` uses to check
  * API.md doesn't drift from the implemented routes — see that script for how
  * the two stay in sync.
@@ -24,9 +24,9 @@ import {
   flagCommentSchema,
   manualEventSchema,
   notifyEventSchema,
+  bridgeVoteSchema,
+  circuitParamsSchema,
 } from "./validation/schemas.js";
-import { bridgeVoteSchema } from "./routes/bridge.js";
-import { circuitParamsSchema } from "./routes/circuits.js";
 
 extendZodWithOpenApi(z);
 
