@@ -248,7 +248,7 @@ export interface StructuredError {
   message: string;
   details?: unknown;
   requestId: string;
-  traceId?: string;
+  traceId: string;
   timestamp: string;
 }
 
