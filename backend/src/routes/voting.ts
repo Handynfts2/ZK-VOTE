@@ -13,7 +13,7 @@ import {
   server,
   relayerKeypair,
   callWithTimeout,
-  simulateWithBackoff,
+  simulateTransactionWithCaching,
   waitForTransaction,
   withSequenceLock,
   u256ToScVal,
@@ -117,13 +117,17 @@ router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBod
 
       // Simulate
       log("info", "simulate_vote", { daoId, proposalId });
-      const simResult = await callWithTimeout(
-        () =>
-          simulateWithBackoff(() =>
-            (server as StellarSdk.rpc.Server).simulateTransaction(tx),
-          ),
-        "simulate_vote",
-      );
+      let simResult;
+      try {
+        simResult = await simulateTransactionWithCaching(tx);
+      } catch (err) {
+        log("warn", "simulation_failed_rpc", {
+          daoId,
+          proposalId,
+          error: (err as Error).message,
+        });
+        throw new Error(`SIMULATION_FAILED:Simulation RPC error: ${(err as Error).message}`);
+      }
 
       if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
         log("warn", "simulation_failed", {
@@ -142,7 +146,7 @@ router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBod
           } else if (errorStr.includes("invalid proof")) {
             errorMessage = "Invalid vote proof";
           } else if (errorStr.includes("root must match")) {
-            errorMessage = "You are not eligible to vote on this proposal";
+            errorMessage = "You are not eligible to vote on this proposal (root mismatch)";
           } else if (errorStr.includes("proposal not found")) {
             errorMessage = "Proposal not found";
           } else if (errorStr.includes("UnreachableCodeReached")) {

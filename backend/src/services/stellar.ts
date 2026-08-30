@@ -6,6 +6,7 @@
  */
 
 import * as StellarSdk from "@stellar/stellar-sdk";
+import NodeCache from "node-cache";
 import { config, BN254_SCALAR_FIELD } from "../config.js";
 import { log, logger } from "./logger.js";
 import {
@@ -18,6 +19,55 @@ import {
 } from "./metrics.js";
 import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
+
+import crypto from "crypto";
+// ... (imports)
+
+// ============================================
+// SIMULATION CACHE
+// ============================================
+
+const simCache = new NodeCache({ stdTTL: 10, checkperiod: 2 }); // 10s TTL
+
+export class SimulationError extends Error {
+  constructor(
+    public message: string,
+    public simulationResult: any,
+  ) {
+    super(message);
+    this.name = "SimulationError";
+  }
+}
+
+/**
+ * Simulate transaction with caching.
+ * Uses operation arguments hash as cache key.
+ */
+export async function simulateTransactionWithCaching(
+  tx: StellarSdk.Transaction,
+): Promise<StellarSdk.rpc.Api.SimulateTransactionResponse> {
+  // Generate cache key based on transaction operations
+  const txHash = crypto
+    .createHash("sha256")
+    .update(tx.toXDR())
+    .digest("hex");
+
+  const cached = simCache.get<StellarSdk.rpc.Api.SimulateTransactionResponse>(
+    txHash,
+  );
+  if (cached) {
+    log("info", "simulation_cache_hit", { txHash });
+    return cached;
+  }
+
+  log("info", "simulation_cache_miss", { txHash });
+  const result = await simulateWithBackoff(() =>
+    (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+  );
+
+  simCache.set(txHash, result);
+  return result;
+}
 
 // ============================================
 // TYPE DEFINITIONS
