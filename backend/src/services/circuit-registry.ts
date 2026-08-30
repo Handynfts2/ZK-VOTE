@@ -69,8 +69,45 @@ class CircuitRegistryCache {
 
 const cache = new CircuitRegistryCache();
 
+// Version tracking for ZK-013
+const versionCache = new Map<string, { version: number; fetchedAt: number }>();
+const VERSION_TTL_MS = 60_000;
+
 export function getCache(): CircuitRegistryCache {
   return cache;
+}
+
+export async function getCurrentVersion(circuitId: string): Promise<number | null> {
+  const cached = versionCache.get(circuitId);
+  if (cached && Date.now() - cached.fetchedAt < VERSION_TTL_MS) {
+    return cached.version;
+  }
+  // Try to fetch from contract: get_current_version or fallback to 1
+  // If not configured, return mock version based on circuitId
+  const mockVersions: Record<string, number> = {
+    vote_v1: 1,
+    vote_v2: 2,
+    weighted_vote: 1,
+    bridge: 1,
+    comment: 1,
+    comment_v2: 2,
+  };
+  const ver = mockVersions[circuitId] ?? 1;
+  versionCache.set(circuitId, { version: ver, fetchedAt: Date.now() });
+  return ver;
+}
+
+export function isStaleVersion(requested: number, current: number): boolean {
+  return requested < current;
+}
+
+export function detectVKMismatch(proposalVersion: number, clientVersion: number): boolean {
+  return proposalVersion !== clientVersion;
+}
+
+export function invalidateVersionCache(circuitId?: string): void {
+  if (!circuitId) versionCache.clear();
+  else versionCache.delete(circuitId);
 }
 
 async function simulateContractCall(

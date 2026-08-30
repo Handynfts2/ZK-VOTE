@@ -89,8 +89,6 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  auditRoutes,
-  remediationRoutes,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -232,13 +230,6 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-app.use(auditRoutes);
-app.use(remediationRoutes);
-
-// OpenAPI spec endpoint (public, no audit log pollution for spec itself)
-app.get("/openapi.json", (_req, res) => {
-  res.json(openApiSpec);
-});
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -307,22 +298,43 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-  const pending = getPendingSequenceLockOps();
-  if (pending > 0) {
-    log("info", "shutdown_draining_sequence_lock", { pending });
-  }
-  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
-  log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
-    drained,
-    remaining: getPendingSequenceLockOps(),
-  });
+    // Keep the startup banner on stdout for human-readable output
+    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
 
-  try {
-    closeDb();
-    log("info", "shutdown_component_stopped", { component: "database" });
-  } catch (err) {
-    log("error", "shutdown_db_close_error", {
-      error: (err as Error).message,
+    logger.info("endpoints_registered", {
+      core: [
+        "/health",
+        "/ready",
+        "/config",
+        "/vote",
+        "/proposal/:dao/:prop",
+        "/root/:dao",
+        "/events/:daoId",
+        "/events/notify",
+        "/indexer/status",
+      ],
+      comments: [
+        "/comment/anonymous",
+        "/comments/:dao/:prop",
+        "/comments/:dao/:prop/nonce",
+        "/comment/:dao/:prop/:id",
+        "/comment/edit",
+        "/comment/delete",
+      ],
+      bridge: [
+        "/bridge/vote",
+        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
+        "/bridge/relay",
+      ],
+      ipfs: config.ipfsEnabled
+        ? [
+            "/ipfs/image",
+            "/ipfs/metadata",
+            "/ipfs/:cid",
+            "/ipfs/image/:cid",
+            "/ipfs/health",
+          ]
+        : [],
     });
   }
 
