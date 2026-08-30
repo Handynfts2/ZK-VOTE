@@ -691,6 +691,56 @@ export const ENDPOINTS: EndpointDef[] = [
     },
     errorStatuses: [400, 401, 403, 409, 429, 500, 503, 504],
   },
+  // ---- Audit ----
+  {
+    method: "get",
+    path: "/audit/logs",
+    tag: "Audit",
+    summary: "Query audit logs (redacted, authz)",
+    auth: true,
+    rateLimit: "queryLimiter",
+    query: {
+      action: z.string().optional().openapi({ example: "vote_relay" }),
+      actor: z.string().optional().openapi({ example: "member_123" }),
+      method: z.string().optional().openapi({ example: "POST" }),
+      path: z.string().optional().openapi({ example: "/vote" }),
+      from: z.string().optional().openapi({ example: "2026-01-01T00:00:00Z" }),
+      to: z.string().optional().openapi({ example: "2026-12-31T23:59:59Z" }),
+      limit: z.string().optional().openapi({ example: "50" }),
+      offset: z.string().optional().openapi({ example: "0" }),
+    },
+    responseExample: { entries: [], total: 0, limit: 50, offset: 0 },
+    errorStatuses: [400, 401, 500],
+  },
+  {
+    method: "get",
+    path: "/audit/export",
+    tag: "Audit",
+    summary: "Export audit logs (json/csv)",
+    auth: true,
+    rateLimit: "queryLimiter",
+    query: {
+      format: z.enum(["json", "csv"]).optional().openapi({ example: "json" }),
+    },
+    responseExample: "[]",
+    errorStatuses: [400, 401, 500],
+  },
+  {
+    method: "get",
+    path: "/audit/stats",
+    tag: "Audit",
+    summary: "Audit statistics",
+    auth: true,
+    rateLimit: "queryLimiter",
+    responseExample: {
+      total: 0,
+      byAction: {},
+      byMethod: {},
+      oldest: null,
+      newest: null,
+    },
+    errorStatuses: [401, 500],
+  },
 ];
 
 // ============================================

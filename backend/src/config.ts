@@ -408,14 +408,13 @@ export const config = {
   tokenAuditLogEnabled: validatedEnv.TOKEN_AUDIT_LOG_ENABLED,
 
   // Contract IDs
-  votingContractId: validatedEnv.VOTING_CONTRACT_ID,
-  treeContractId: validatedEnv.TREE_CONTRACT_ID,
-  commentsContractId: validatedEnv.COMMENTS_CONTRACT_ID,
-  daoRegistryContractId: validatedEnv.DAO_REGISTRY_CONTRACT_ID,
-  membershipSbtContractId: validatedEnv.MEMBERSHIP_SBT_CONTRACT_ID,
-  bridgeContractId: validatedEnv.BRIDGE_CONTRACT_ID,
-  circuitRegistryContractId: validatedEnv.CIRCUIT_REGISTRY_CONTRACT_ID,
-  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
+  votingContractId: process.env.VOTING_CONTRACT_ID,
+  treeContractId: process.env.TREE_CONTRACT_ID,
+  commentsContractId: process.env.COMMENTS_CONTRACT_ID,
+  daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
+  membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
+  bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
+  circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
   // VK Version
   staticVkVersion: validatedEnv.VOTING_VK_VERSION,
@@ -624,25 +623,32 @@ export function validateEnv(): void {
     );
   }
 
-  if (
-    config.commentsContractId &&
-    !isValidContractId(config.commentsContractId)
-  ) {
-    errors.push(
-      `COMMENTS_CONTRACT_ID "${config.commentsContractId}" is not a valid Stellar contract ID`,
+  const criticalKeys = ["VOTING_CONTRACT_ID", "TREE_CONTRACT_ID", "RELAYER_SECRET_KEY", "RELAYER_AUTH_TOKEN"];
+  const criticalMissing = missing.filter((k) => criticalKeys.includes(k));
+  const nonCriticalMissing = missing.filter((k) => !criticalKeys.includes(k));
+
+  if (criticalMissing.length > 0) {
+    console.error(
+      JSON.stringify({ level: "error", event: "missing_env", missing: criticalMissing }),
     );
   }
 
-  if (
-    config.authMasterKey &&
-    config.authMasterKey.length < 32 &&
-    !config.testMode
-  ) {
-    errors.push(
-      "AUTH_MASTER_KEY must be at least 32 characters (not in test mode)",
-    );
+  if (nonCriticalMissing.length > 0) {
+    if (config.testMode) {
+      console.warn(
+        JSON.stringify({ level: "warn", event: "missing_optional_env_in_test_mode", missing: nonCriticalMissing }),
+      );
+    } else {
+      console.error(
+        JSON.stringify({ level: "error", event: "missing_env", missing: nonCriticalMissing }),
+      );
+      console.error("\nRun ./scripts/init-local.sh to generate backend/.env");
+      process.exit(1);
+    }
   }
 
+  // Validate auth token strength (minimum 32 characters for security)
+  // Skip validation in test mode since tests set short tokens for convenience
   if (
     config.relayerAuthToken &&
     config.relayerAuthToken.length < 32 &&
@@ -690,10 +696,7 @@ export function validateEnv(): void {
     );
   }
 
-  if (
-    config.rewardsContractId &&
-    !isValidContractId(config.rewardsContractId)
-  ) {
+  if (config.commentsContractId && !isValidContractId(config.commentsContractId)) {
     console.error(
       JSON.stringify({
         level: "error",
@@ -704,4 +707,5 @@ export function validateEnv(): void {
     );
     process.exit(1);
   }
+  // In test mode, missing comments contract is allowed (warned above, not fatal)
 }

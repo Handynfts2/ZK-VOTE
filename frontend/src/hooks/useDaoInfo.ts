@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyDaoRegistry } from "../lib/readOnlyContracts";
 
 interface UseDaoInfoOptions {
@@ -90,7 +90,7 @@ export function useDaoInfo({
       // Try with wallet client first, fall back to read-only if unfunded
       if (publicKey) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           result = await clients.daoRegistry.get_dao({
             dao_id: BigInt(daoId),
           });

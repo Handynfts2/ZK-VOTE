@@ -21,3 +21,4 @@ export { default as novaRoutes } from "./nova.js";
 export { default as adminRoutes } from "./admin.js";
 export { default as thresholdRoutes } from "./threshold.js";
 export { default as membershipRoutes } from "./membership.js";
+export { default as auditRoutes } from "./audit.js";
