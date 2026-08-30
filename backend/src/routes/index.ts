@@ -13,5 +13,3 @@ export { default as claimRoutes } from "./claim.js";
 export { default as indexerRoutes, initIndexerRoutes } from "./indexer.js";
 export { default as bridgeRoutes } from "./bridge.js";
 export { default as circuitRoutes } from "./circuits.js";
-export { default as auditRoutes } from "./audit.js";
-export { default as remediationRoutes } from "./remediation.js";

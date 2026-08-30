@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
@@ -229,7 +229,7 @@ export function useMemberData({
 
       if (publicKey) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
 
           result = await clients.membershipTree.get_tree_info({
             dao_id: BigInt(daoId),

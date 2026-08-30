@@ -396,14 +396,13 @@ export const config = {
   tokenAuditLogEnabled: validatedEnv.TOKEN_AUDIT_LOG_ENABLED,
 
   // Contract IDs
-  votingContractId: validatedEnv.VOTING_CONTRACT_ID,
-  treeContractId: validatedEnv.TREE_CONTRACT_ID,
-  commentsContractId: validatedEnv.COMMENTS_CONTRACT_ID,
-  daoRegistryContractId: validatedEnv.DAO_REGISTRY_CONTRACT_ID,
-  membershipSbtContractId: validatedEnv.MEMBERSHIP_SBT_CONTRACT_ID,
-  bridgeContractId: validatedEnv.BRIDGE_CONTRACT_ID,
-  circuitRegistryContractId: validatedEnv.CIRCUIT_REGISTRY_CONTRACT_ID,
-  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
+  votingContractId: process.env.VOTING_CONTRACT_ID,
+  treeContractId: process.env.TREE_CONTRACT_ID,
+  commentsContractId: process.env.COMMENTS_CONTRACT_ID,
+  daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
+  membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
+  bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
+  circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
   // VK Version
   staticVkVersion: validatedEnv.VOTING_VK_VERSION,

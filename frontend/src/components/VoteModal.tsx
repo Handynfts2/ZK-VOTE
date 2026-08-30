@@ -2,13 +2,8 @@ import { useState } from "react";
 import { Button } from "./ui/Button";
 import Alert from "./ui/Alert";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
-import {
-  relayerFetch,
-  parseApiError,
-  getApiErrorCode,
-  ErrorCode,
-} from "../lib/api";
+import { getZkVoteClient } from "../lib/client";
+import { relayerFetch } from "../lib/api";
 import {
   generateVoteProof,
   formatProofForSoroban,
@@ -63,7 +58,7 @@ export default function VoteModal({
 
     try {
       // Initialize contract clients
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Step 1: Load registration data (or regenerate from wallet)
       setProgress("Loading voting credentials...");
