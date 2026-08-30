@@ -154,6 +154,8 @@ export const TreeError = {
   RootNotFound: 13,
   AlreadyInitialized: 14,
   MemberNotRevoked: 15,
+  CommitmentAlreadyUsed: 16,
+  RateLimited: 17,
 } as const;
 export type TreeError = (typeof TreeError)[keyof typeof TreeError];
 
@@ -306,6 +308,8 @@ export const ERROR_MESSAGES: Record<string, Record<number, string>> = {
     [TreeError.RootNotFound]: "Merkle root not found in history",
     [TreeError.AlreadyInitialized]: "Tree already initialized",
     [TreeError.MemberNotRevoked]: "Member has not been revoked",
+    [TreeError.CommitmentAlreadyUsed]: "Identity commitment already used",
+    [TreeError.RateLimited]: "Too many registrations: try again once the cooldown window has passed",
   },
   Voting: {
     [VotingError.NotAdmin]: "Only DAO admin can perform this action",

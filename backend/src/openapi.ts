@@ -24,6 +24,7 @@ import {
   flagCommentSchema,
   manualEventSchema,
   notifyEventSchema,
+  membershipRegisterSchema,
 } from "./validation/schemas.js";
 import { bridgeVoteSchema } from "./routes/bridge.js";
 import { circuitParamsSchema } from "./routes/circuits.js";
@@ -669,6 +670,26 @@ export const ENDPOINTS: EndpointDef[] = [
     },
     responseExample: { daoId: 1, attempts: [], total: 0, limit: 50, offset: 0 },
     errorStatuses: [400, 401, 500],
+  },
+  // ---- Membership ----
+  {
+    method: "post",
+    path: "/membership/register-commitment",
+    tag: "Membership",
+    summary:
+      "Prepare a commitment registration transaction (per-member rate limited, #371)",
+    auth: true,
+    rateLimit: "commitmentRegistrationLimiter",
+    body: membershipRegisterSchema,
+    responseExample: {
+      success: true,
+      prepared: true,
+      daoId: 0,
+      caller: "G...",
+      transactionXdr: "AAAA...",
+      authEntry: ["AAAAA..."],
+    },
+    errorStatuses: [400, 401, 403, 409, 429, 500, 503, 504],
   },
 ];
 

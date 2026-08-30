@@ -89,6 +89,24 @@ export const coalescingWaitTime = new Histogram({
 });
 
 // ============================================
+// MEMBERSHIP REGISTRATION METRICS (#371)
+// ============================================
+
+export const membershipRegistrationTotal = new Counter({
+  name: "zkvote_membership_registration_requests_total",
+  help: "Total commitment registration requests served by the membership route",
+  labelNames: ["dao_id"] as const,
+  registers: [register],
+});
+
+export const membershipRegistrationLimited = new Counter({
+  name: "zkvote_membership_registration_limited_total",
+  help: "Commitment registration requests blocked by rate limiting or the on-chain registration cooldown",
+  labelNames: ["reason"] as const,
+  registers: [register],
+});
+
+// ============================================
 // SOROBAN RPC METRICS
 // ============================================
 
