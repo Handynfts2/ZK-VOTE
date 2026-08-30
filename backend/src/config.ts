@@ -218,6 +218,12 @@ const envSchema = z.object({
     .positive()
     .default(60000),
   RELAYER_PUBLIC_KEY: z.string().default(""),
+  MAX_SPONSORED_FEE_STROOPS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000_000)
+    .default(100000),
 
   CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD: z.coerce
     .number()
@@ -487,6 +493,7 @@ export const config = {
   walletRateLimitMax: validatedEnv.WALLET_RATE_LIMIT_MAX,
   walletRateLimitWindowMs: validatedEnv.WALLET_RATE_LIMIT_WINDOW_MS,
   relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
+  maxSponsoredFeeStroops: validatedEnv.MAX_SPONSORED_FEE_STROOPS,
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold:
     validatedEnv.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD,
