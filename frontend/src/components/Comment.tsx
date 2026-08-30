@@ -26,7 +26,7 @@ import {
   uploadCommentContent,
   editComment,
 } from "../lib/comments";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 
 interface CommentProps {
   comment: CommentWithContent;
@@ -77,7 +77,7 @@ export default function Comment({
   // Initialize contract clients when needed (memoized for performance)
   const contractClients = useMemo(() => {
     if (!publicKey) return null;
-    return initializeContractClients(publicKey);
+    return getZkVoteClient(publicKey);
   }, [publicKey]);
 
   const isOwnPublicComment = comment.author === publicKey;
@@ -90,6 +90,7 @@ export default function Comment({
   // Deleted comments should always show history if we have the original content CID
   const canViewHistory =
     hasRevisions || (comment.deleted && comment.contentCid);
+  const isPending = comment.isPending;
 
   const handleDeleteClick = () => {
     setShowDeleteConfirm(true);
@@ -194,7 +195,9 @@ export default function Comment({
   };
 
   return (
-    <div className={`${depth > 0 ? "ml-2 sm:ml-4 md:ml-6 border-l-2 border-muted pl-2 sm:pl-4" : ""}`}>
+    <div
+      className={`${depth > 0 ? "ml-2 sm:ml-4 md:ml-6 border-l-2 border-muted pl-2 sm:pl-4" : ""} ${isPending ? "opacity-60 pointer-events-none" : ""}`}
+    >
       <div className="group py-3">
         {/* Header */}
         <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -234,22 +237,32 @@ export default function Comment({
           </div>
 
           {/* Timestamp */}
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
             {formatRelativeTime(comment.createdAt)}
+            {isPending && (
+              <span className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
+                &bull; <Loader2 className="w-3 h-3 animate-spin" /> Pending...
+              </span>
+            )}
           </span>
 
           {/* Edited badge */}
-          {comment.updatedAt > comment.createdAt && !comment.deleted && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-              edited
-            </Badge>
-          )}
+          {comment.updatedAt > comment.createdAt &&
+            !comment.deleted &&
+            !isPending && (
+              <Badge
+                variant="secondary"
+                className="text-[10px] px-1.5 py-0 h-4"
+              >
+                edited
+              </Badge>
+            )}
 
           {/* Spacer */}
           <div className="flex-1" />
 
           {/* Actions */}
-          {!comment.deleted && (
+          {!comment.deleted && !isPending && (
             <div className="relative ml-auto">
               <button
                 onClick={() => setShowActions(!showActions)}
@@ -370,7 +383,7 @@ export default function Comment({
         )}
 
         {/* Quick reply button for top-level comments */}
-        {canReply && !showReplyForm && !isEditing && (
+        {canReply && !showReplyForm && !isEditing && !isPending && (
           <button
             onClick={() => setShowReplyForm(true)}
             className="mt-2 text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"

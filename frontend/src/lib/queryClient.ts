@@ -66,4 +66,11 @@ export const queryKeys = {
     list: (daoId: number, proposalId: number) =>
       ["comments", "list", daoId, proposalId] as const,
   },
+
+  // Claim queries (Vote-to-Earn)
+  claim: {
+    status: (daoId: number, proposalId: number, claimNullifier: string) =>
+      ["claim", "status", daoId, proposalId, claimNullifier] as const,
+    treasury: (daoId: number) => ["claim", "treasury", daoId] as const,
+  },
 } as const;

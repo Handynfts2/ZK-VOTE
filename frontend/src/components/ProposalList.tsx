@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { useProposalListQuery, useInvalidateProposals } from "../queries";
 import ProposalCard from "./ProposalCard";
@@ -42,10 +43,10 @@ export default function ProposalList({
 
   const invalidateProposals = useInvalidateProposals();
 
-  const handleVoteComplete = () => {
+  const handleVoteComplete = useCallback(() => {
     invalidateProposals(daoId);
     refetch();
-  };
+  }, [daoId, invalidateProposals, refetch]);
 
   if (isLoading && proposals.length === 0) {
     return (

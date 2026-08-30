@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProposalCard from "./ProposalCard";
 import { getZKCredentials } from "../lib/zk";
+
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
 
 // Mock react-router-dom useNavigate
 const mockNavigate = vi.fn();
@@ -60,7 +68,12 @@ describe("ProposalCard", () => {
   });
 
   const renderWithRouter = (component: React.ReactElement) => {
-    return render(<BrowserRouter>{component}</BrowserRouter>);
+    const queryClient = createTestQueryClient();
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>{component}</BrowserRouter>
+      </QueryClientProvider>,
+    );
   };
 
   describe("Rendering", () => {
@@ -213,6 +226,7 @@ describe("ProposalCard", () => {
       mockGetZKCredentials.mockReturnValue({
         secret: "123",
         salt: "456",
+        blindingFactor: "999",
         commitment: "789",
         leafIndex: 0,
       });
@@ -256,6 +270,7 @@ describe("ProposalCard", () => {
       mockGetZKCredentials.mockReturnValue({
         secret: "123",
         salt: "456",
+        blindingFactor: "999",
         commitment: "789",
         leafIndex: 0,
       });
@@ -279,6 +294,7 @@ describe("ProposalCard", () => {
       mockGetZKCredentials.mockReturnValue({
         secret: "123",
         salt: "456",
+        blindingFactor: "999",
         commitment: "789",
         leafIndex: 0,
       });
@@ -414,6 +430,7 @@ describe("ProposalCard with VoteModal", () => {
     mockGetZKCredentials.mockReturnValue({
       secret: "123",
       salt: "456",
+      blindingFactor: "999",
       commitment: "789",
       leafIndex: 0,
     });
@@ -424,7 +441,12 @@ describe("ProposalCard with VoteModal", () => {
   });
 
   const renderWithRouter = (component: React.ReactElement) => {
-    return render(<BrowserRouter>{component}</BrowserRouter>);
+    const queryClient = createTestQueryClient();
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>{component}</BrowserRouter>
+      </QueryClientProvider>,
+    );
   };
 
   it("closes vote modal when onClose is triggered", async () => {

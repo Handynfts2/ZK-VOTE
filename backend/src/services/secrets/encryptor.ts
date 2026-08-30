@@ -19,7 +19,13 @@ const DIGEST = "sha256";
  * Derive a 256-bit encryption key from a master passphrase
  */
 function deriveKey(masterKey: string, salt: Buffer): Buffer {
-  return crypto.pbkdf2Sync(masterKey, salt, PBKDF2_ITERATIONS, KEY_LENGTH, DIGEST);
+  return crypto.pbkdf2Sync(
+    masterKey,
+    salt,
+    PBKDF2_ITERATIONS,
+    KEY_LENGTH,
+    DIGEST,
+  );
 }
 
 /**
@@ -32,7 +38,10 @@ export function encrypt(plaintext: string, masterKey: string): string {
   const key = deriveKey(masterKey, salt);
 
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, "utf-8"), cipher.final()]);
+  const encrypted = Buffer.concat([
+    cipher.update(plaintext, "utf-8"),
+    cipher.final(),
+  ]);
   const authTag = cipher.getAuthTag();
 
   const payload = {
@@ -62,7 +71,10 @@ export function decrypt(ciphertext: string, masterKey: string): string {
   const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
 
-  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  const decrypted = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final(),
+  ]);
   return decrypted.toString("utf-8");
 }
 

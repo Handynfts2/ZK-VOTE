@@ -21,9 +21,29 @@ import {
   auditLog,
   queryLimiter,
   validateParams,
+  validateQuery,
+  bodyLimit,
 } from "../middleware/index.js";
-import { daoParamsSchema, archiveParamsSchema } from "../validation/schemas.js";
+import {
+  daoParamsSchema,
+  eventsQuerySchema,
+  archiveParamsSchema,
+} from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import type { EventQueryOptions } from "../services/db.js";
+
+function encodeCursor(
+  event: { id?: number; ledger?: number | null; timestamp?: string | null },
+  cursorField: string,
+): string {
+  const payload =
+    cursorField === "ledger"
+      ? { l: event.ledger }
+      : cursorField === "timestamp"
+        ? { t: event.timestamp }
+        : { i: event.id };
+  return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
 
 const router = Router();
 
@@ -51,7 +71,9 @@ router.get("/events/archived", queryLimiter, (req: Request, res: Response) => {
     const archives = getArchiveIndex(id);
     res.json({ archives, total: archives.length });
   } catch (err) {
-    log("error", "get_archived_events_index_failed", { error: (err as Error).message });
+    log("error", "get_archived_events_index_failed", {
+      error: (err as Error).message,
+    });
     res.status(500).json({ error: "Failed to get archived events index" });
   }
 });
@@ -59,38 +81,74 @@ router.get("/events/archived", queryLimiter, (req: Request, res: Response) => {
 /**
  * GET /events/archived/:archiveId - Retrieve historical archived events
  */
-router.get("/events/archived/:archiveId", queryLimiter, validateParams(archiveParamsSchema), (req: Request, res: Response) => {
-  const { archiveId } = (req as any).validatedParams;
-  try {
-    const events = readArchivedEvents(archiveId.toString());
-    res.json({ archiveId, events, total: events.length });
-  } catch (err) {
-    log("error", "read_archived_events_failed", { archiveId, error: (err as Error).message });
-    res.status(500).json({ error: "Failed to read archived events" });
-  }
-});
+router.get(
+  "/events/archived/:archiveId",
+  queryLimiter,
+  validateParams(archiveParamsSchema),
+  (req: Request, res: Response) => {
+    const { archiveId } = (req as any).validatedParams;
+    try {
+      const events = readArchivedEvents(archiveId.toString());
+      res.json({ archiveId, events, total: events.length });
+    } catch (err) {
+      log("error", "read_archived_events_failed", {
+        archiveId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to read archived events" });
+    }
+  },
+);
 
 /**
- * GET /events/:daoId - Get events for a DAO
+ * GET /events/:daoId - Get events for a DAO (cursor-based pagination)
  */
-router.get("/events/:daoId", queryLimiter, validateParams(daoParamsSchema), (req: Request, res: Response) => {
-  const { daoId } = (req as any).validatedParams;
-  const { limit = "50", offset = "0", types } = req.query;
+router.get(
+  "/events/:daoId",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  validateQuery(eventsQuerySchema),
+  (async (req: Request, res: Response) => {
+    const { daoId } = (req as any).validatedParams;
+    const { limit, cursor, types, orderBy, orderDirection, cursorField } = (
+      req as any
+    ).validatedQuery;
 
-  try {
-    const options = {
-      limit: Math.min(parseInt(limit as string) || 50, 100),
-      offset: parseInt(offset as string) || 0,
-      types: types ? (types as string).split(",") : null,
-    };
+    try {
+      const options: EventQueryOptions = {
+        limit,
+        types,
+        orderBy,
+        orderDirection,
+        cursor,
+        cursorField,
+      };
 
-    const result = getEventsForDao(daoId, options);
-    res.json(result);
-  } catch (err) {
-    log("error", "get_events_failed", { daoId, error: (err as Error).message });
-    res.status(500).json({ error: "Failed to get events" });
-  }
-});
+      const result = getEventsForDao(daoId, options);
+      const hasMore =
+        result.events.length === limit && result.total > result.events.length;
+      const nextCursor =
+        hasMore && result.events.length > 0
+          ? encodeCursor(result.events[result.events.length - 1], cursorField)
+          : undefined;
+
+      res.json({
+        data: result.events,
+        pagination: {
+          cursor: nextCursor,
+          hasMore,
+          total: result.total,
+        },
+      });
+    } catch (err) {
+      log("error", "get_events_failed", {
+        daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to get events" });
+    }
+  }) as AsyncHandler,
+);
 
 /**
  * GET /indexer/status - Get indexer status
@@ -119,20 +177,26 @@ router.get("/indexer/daos", queryLimiter, (req: Request, res: Response) => {
 /**
  * POST /events - Manual event submission (admin only)
  */
-router.post("/events", authGuard, auditLog("events_manual_insert"), (req: Request, res: Response) => {
-  const { daoId, type, data } = req.body;
+router.post(
+  "/events",
+  bodyLimit("2kb"),
+  authGuard,
+  auditLog("events_manual_insert"),
+  (req: Request, res: Response) => {
+    const { daoId, type, data } = req.body;
 
-  if (!daoId || !type) {
-    return res.status(400).json({ error: "daoId and type are required" });
-  }
+    if (!daoId || !type) {
+      return res.status(400).json({ error: "daoId and type are required" });
+    }
 
-  try {
-    addManualEvent(daoId, type, data || {});
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Failed to add event" });
-  }
-});
+    try {
+      addManualEvent(daoId, type, data || {});
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ error: "Failed to add event" });
+    }
+  },
+);
 
 /**
  * POST /events/notify - Frontend event notification
@@ -140,60 +204,64 @@ router.post("/events", authGuard, auditLog("events_manual_insert"), (req: Reques
 // N4 hardening: was unauthenticated. Inbound events fan out into Soroban RPC
 // reads (sync_membership) — unauthenticated callers could amplify into a
 // downstream-RPC DoS.
-router.post("/events/notify", authGuard, auditLog("events_notify"), queryLimiter, (async (
-  req: Request,
-  res: Response,
-) => {
-  const { daoId, type, data, txHash } = req.body;
+router.post(
+  "/events/notify",
+  bodyLimit("2kb"),
+  authGuard,
+  auditLog("events_notify"),
+  queryLimiter,
+  (async (req: Request, res: Response) => {
+    const { daoId, type, data, txHash } = req.body;
 
-  if (!daoId || !type || !txHash) {
-    return res
-      .status(400)
-      .json({ error: "daoId, type, and txHash are required" });
-  }
-
-  if (!/^[0-9a-fA-F]{64}$/.test(txHash)) {
-    return res.status(400).json({ error: "Invalid txHash format" });
-  }
-
-  // Prevent accumulation by limiting pending unverified events per DAO
-  const pendingCount = getPendingEventsCountForDao(Number(daoId));
-  if (pendingCount >= 50) {
-    log("warn", "pending_events_limit_exceeded", { daoId, pendingCount });
-    return res
-      .status(429)
-      .json({ error: "Pending event limit exceeded for this DAO" });
-  }
-
-  try {
-    notifyEvent(Number(daoId), type, data || {}, txHash);
-
-    // Trigger membership cache refresh for membership events
-    const membershipEvents = [
-      "sbt_mint",
-      "sbt_revoke",
-      "member_join",
-      "member_leave",
-      "self_join",
-    ];
-    if (membershipEvents.includes(type) && triggerMembershipSync) {
-      triggerMembershipSync(Number(daoId)).catch((err) => {
-        log("warn", "triggered_membership_sync_failed", {
-          daoId,
-          error: (err as Error).message,
-        });
-      });
+    if (!daoId || !type || !txHash) {
+      return res
+        .status(400)
+        .json({ error: "daoId, type, and txHash are required" });
     }
 
-    res.json({ success: true, message: "Event queued for verification" });
-  } catch (err) {
-    log("error", "notify_event_failed", {
-      daoId,
-      type,
-      error: (err as Error).message,
-    });
-    res.status(500).json({ error: "Failed to notify event" });
-  }
-}) as AsyncHandler);
+    if (!/^[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ error: "Invalid txHash format" });
+    }
+
+    // Prevent accumulation by limiting pending unverified events per DAO
+    const pendingCount = getPendingEventsCountForDao(Number(daoId));
+    if (pendingCount >= 50) {
+      log("warn", "pending_events_limit_exceeded", { daoId, pendingCount });
+      return res
+        .status(429)
+        .json({ error: "Pending event limit exceeded for this DAO" });
+    }
+
+    try {
+      notifyEvent(Number(daoId), type, data || {}, txHash);
+
+      // Trigger membership cache refresh for membership events
+      const membershipEvents = [
+        "sbt_mint",
+        "sbt_revoke",
+        "member_join",
+        "member_leave",
+        "self_join",
+      ];
+      if (membershipEvents.includes(type) && triggerMembershipSync) {
+        triggerMembershipSync(Number(daoId)).catch((err) => {
+          log("warn", "triggered_membership_sync_failed", {
+            daoId,
+            error: (err as Error).message,
+          });
+        });
+      }
+
+      res.json({ success: true, message: "Event queued for verification" });
+    } catch (err) {
+      log("error", "notify_event_failed", {
+        daoId,
+        type,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to notify event" });
+    }
+  }) as AsyncHandler,
+);
 
 export default router;

@@ -229,3 +229,51 @@ fn vote_with_token_gate(..., voter, proposal_id) {
 3. **Cooldown duration**: The 7-day cooldown is a default that should be adjusted based on the election duration. Short elections may use shorter cooldowns; long elections should extend it.
 
 4. **Gas costs**: TWAB computation iterates over checkpoints within a range. For frequently-traded tokens, this could be expensive. Consider limiting the checkpoint range.
+
+## Proof Serialization Format (ZKV1)
+
+The ZK proof pipeline (snarkjs JSON &rarr; backend `stellar.ts` &rarr; Soroban `Proof`/`BytesN<256>`) previously converted between representations without a single documented byte layout. `ZKV1` is the canonical, versioned wire format used to move a Groth16 proof between components, implemented identically in:
+
+- Rust: `contracts/zkvote-groth16/src/serialization.rs` (`serialize_proof` / `deserialize_proof`)
+- TypeScript: `backend/src/services/proofSerialization.ts` (`serializeProof` / `deserializeProof`)
+
+### Byte layout
+
+```
+[ version (1B) | curve_id (1B) | A_x (32B) | A_y (32B)
+  | B_x1 (32B) | B_x2 (32B) | B_y1 (32B) | B_y2 (32B)
+  | C_x (32B) | C_y (32B) ]
+```
+
+| Field | Size | Description |
+|-------|------|--------------|
+| `version` | 1 byte | Format version, currently `0x01`. Bumped on any incompatible layout change so old/new decoders can safely reject data they don't understand. |
+| `curve_id` | 1 byte | `0x00` = BN254, `0x01` = BLS12-381. |
+| `A` | 64 bytes | G1 affine point, `X \|\| Y`, each coordinate 32-byte **big-endian**. |
+| `B` | 128 bytes | G2 affine point, `X_c1 \|\| X_c0 \|\| Y_c1 \|\| Y_c0`, each 32-byte big-endian (matches the existing `G2Hex` convention in `backend/src/types/index.ts`). |
+| `C` | 64 bytes | G1 affine point, same layout as `A`. |
+
+Total length: `1 + 1 + 64 + 128 + 64 = 258` bytes.
+
+**Endianness**: all field-element bytes are big-endian, matching `hexToBytes`/`proofToScVal` in `backend/src/services/stellar.ts` and the `BytesN<64>`/`BytesN<128>` big-endian convention already used by the contract.
+
+### Example proof vector (interoperability fixture)
+
+For cross-implementation testing (see `backend/test/proof-serialization.test.js`), the following degenerate-but-well-formed vector round-trips through both the Rust and TypeScript implementations:
+
+```
+a = 0x01 repeated 64 times
+b = 0x02 repeated 128 times
+c = 0x03 repeated 64 times
+version = 0x01, curve_id = 0x00 (BN254)
+
+ZKV1 bytes (hex) = 0x0100 + ("01" * 64) + ("02" * 128) + ("03" * 64)
+```
+
+### Relationship to `proofToScVal`
+
+`backend/src/services/stellar.ts::proofToScVal` continues to build the Soroban `Map { a, b, c }` argument the deployed `Groth16Curve::verify` entry point expects — that map's field order and point sizes are exactly the `A`/`B`/`C` slice of the ZKV1 format (i.e. ZKV1 bytes `[2..258]`). `ZKV1` adds the explicit version/curve header on top so a proof can be stored, logged, or handed to an external auditor as a single self-describing blob without needing out-of-band knowledge of which curve or format revision produced it. `proofToScVal`'s existing point-at-infinity and length validation is reused by `serializeProof`, so a proof that would be rejected by the contract call path is also rejected by the ZKV1 encoder.
+
+### Scope note
+
+This format currently covers the BN254 G1&times;G2&times;G1 proof shape used by the single on-chain `Proof` type (`contracts/zkvote-groth16/src/lib.rs`). The BLS12-381 curve id byte is defined and round-trip tested, but `ProofBls381` uses different point sizes (`BytesN<96>`/`BytesN<192>`); encoding those is a straightforward follow-up (a `curve_id`-dependent length) left out of this change to keep the initial format landing minimal and unambiguous for the BN254 path that is actually deployed today.

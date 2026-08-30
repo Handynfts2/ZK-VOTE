@@ -22,6 +22,34 @@ import {
   profileEventQueries,
 } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
+import { kysely } from "./kysely.js";
+import { sql } from "kysely";
+import {
+  initWalResilience,
+  configureWalResilience,
+  incrementTransactionCounter,
+} from "./walResilience.js";
+import { config } from "../config.js";
+
+/** Optional Prometheus sink — wired from boot so db.ts stays testable without prom-client. */
+export interface DbMetricsSink {
+  setConnectionsActive(n: number): void;
+  setWalSizeBytes(n: number): void;
+  setReadLagMs(n: number): void;
+  setWriteHealthy(healthy: boolean): void;
+  incWriteFailover(result: "success" | "failure"): void;
+}
+
+/** Object holder avoids TDZ if metrics wires during circular ESM init. */
+const metricsState: { sink: DbMetricsSink | null } = { sink: null };
+
+export function setDbMetricsSink(sink: DbMetricsSink | null): void {
+  metricsState.sink = sink;
+}
+
+function metricsSink(): DbMetricsSink | null {
+  return metricsState.sink;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +90,8 @@ export interface EventQueryOptions {
   verifiedOnly?: boolean;
   orderBy?: string;
   orderDirection?: string;
+  cursor?: string;
+  cursorField?: string;
 }
 
 export interface EventQueryResult {
@@ -95,6 +125,14 @@ export interface DbStatus {
   totalEvents: number;
   daoCount: number;
   lastLedger: number;
+  /** Size of the SQLite WAL file in bytes (0 if absent). */
+  walSizeBytes?: number;
+  /** Estimated read-connection lag behind the writer (ms). */
+  readLagMs?: number;
+  /** Whether the write connection is healthy. */
+  writeHealthy?: boolean;
+  /** Active SQLite connections (write + read). */
+  connectionsActive?: number;
 }
 
 export interface IndexedDao {
@@ -292,6 +330,111 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
     ],
     indexes: [{ name: "idx_ttl_cost_cycle", columns: ["cycle_id"] }],
   },
+  auth_tokens: {
+    columns: [
+      { name: "id", type: "TEXT", notNull: true, primaryKey: true },
+      { name: "token_hash", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "client_id", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "description", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "expires_at", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "revoked_at", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "last_used_at", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "use_count", type: "INTEGER", notNull: true, primaryKey: false },
+      {
+        name: "rotation_group_id",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
+      { name: "is_legacy", type: "INTEGER", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_auth_tokens_token_hash", columns: ["token_hash"] },
+      { name: "idx_auth_tokens_client_id", columns: ["client_id"] },
+      { name: "idx_auth_tokens_status", columns: ["status"] },
+      { name: "idx_auth_tokens_expires_at", columns: ["expires_at"] },
+      {
+        name: "idx_auth_tokens_rotation_group",
+        columns: ["rotation_group_id"],
+      },
+    ],
+  },
+  auth_token_audit: {
+    columns: [
+      { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
+      { name: "token_id", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "client_id", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "action", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "path", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "method", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "ip_hash", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "success", type: "INTEGER", notNull: true, primaryKey: false },
+      {
+        name: "error_message",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_auth_audit_token_id", columns: ["token_id"] },
+      { name: "idx_auth_audit_client_id", columns: ["client_id"] },
+      { name: "idx_auth_audit_action", columns: ["action"] },
+      { name: "idx_auth_audit_created_at", columns: ["created_at"] },
+    ],
+  },
+  vote_submissions: {
+    columns: [
+      { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
+      {
+        name: "nullifier_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "tx_hash", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "created_at", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "updated_at", type: "INTEGER", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_vote_submissions_nullifier", columns: ["nullifier_hash"] },
+    ],
+  },
+  proof_commitments: {
+    columns: [
+      {
+        name: "commitment_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: true,
+      },
+      { name: "nullifier", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
+      {
+        name: "proposal_id",
+        type: "INTEGER",
+        notNull: true,
+        primaryKey: false,
+      },
+      {
+        name: "wallet_address",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
+      { name: "timestamp", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_commitments_nullifier", columns: ["nullifier"] },
+      { name: "idx_commitments_wallet", columns: ["wallet_address"] },
+    ],
+  },
 };
 
 function normalizeType(t: string): string {
@@ -312,41 +455,44 @@ function normalizeType(t: string): string {
 
 /** Allowlisted event types for dynamic filtering */
 const ALLOWED_EVENT_TYPES = new Set([
-  'dao_create',
-  'admin_transfer', 
-  'member_added',
-  'member_revoked',
-  'member_left',
-  'tree_init',
-  'voter_registered',
-  'voter_removed',
-  'voter_reinstated',
-  'vk_updated',
-  'proposal_created',
-  'proposal_closed',
-  'proposal_archived',
-  'vote_cast'
+  "dao_create",
+  "admin_transfer",
+  "member_added",
+  "member_revoked",
+  "member_left",
+  "tree_init",
+  "voter_registered",
+  "voter_removed",
+  "voter_reinstated",
+  "vk_updated",
+  "proposal_created",
+  "proposal_closed",
+  "proposal_archived",
+  "vote_cast",
+  "sbt_transfer_attempt",
 ]);
 
 /** Allowlisted column names for dynamic ORDER BY clauses */
 const ALLOWED_ORDER_COLUMNS = new Set([
-  'id',
-  'timestamp',
-  'ledger',
-  'type',
-  'verified',
-  'created_at'
+  "id",
+  "timestamp",
+  "ledger",
+  "type",
+  "verified",
+  "created_at",
 ]);
 
 /** Allowlisted sort directions */
-const ALLOWED_SORT_DIRECTIONS = new Set(['ASC', 'DESC']);
+const ALLOWED_SORT_DIRECTIONS = new Set(["ASC", "DESC"]);
 
 /**
  * Validate and sanitize DAO ID to prevent table name injection
  */
 function validateDaoId(daoId: number): number {
   if (!Number.isInteger(daoId) || daoId < 1 || daoId > 999999) {
-    throw new Error(`Invalid DAO ID: ${daoId}. Must be positive integer ≤ 999999`);
+    throw new Error(
+      `Invalid DAO ID: ${daoId}. Must be positive integer ≤ 999999`,
+    );
   }
   return daoId;
 }
@@ -355,26 +501,46 @@ function validateDaoId(daoId: number): number {
  * Validate event types against allowlist
  */
 function validateEventTypes(types: string[]): string[] {
-  const invalid = types.filter(type => !ALLOWED_EVENT_TYPES.has(type));
+  const invalid = types.filter((type) => !ALLOWED_EVENT_TYPES.has(type));
   if (invalid.length > 0) {
-    throw new Error(`Invalid event types: ${invalid.join(', ')}`);
+    throw new Error(`Invalid event types: ${invalid.join(", ")}`);
   }
   return types;
 }
 
 /**
+ * Decode a base64-encoded cursor back into its components.
+ */
+function decodeCursor(
+  cursor: string,
+  cursorField: string,
+): { i?: number; l?: number; t?: string } {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
+    return decoded;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Validate and sanitize ORDER BY parameters
  */
-function validateOrderBy(column: string, direction: string = 'DESC'): { column: string; direction: string } {
+function validateOrderBy(
+  column: string,
+  direction: string = "DESC",
+): { column: string; direction: string } {
   if (!ALLOWED_ORDER_COLUMNS.has(column)) {
-    throw new Error(`Invalid order column: ${column}. Allowed: ${Array.from(ALLOWED_ORDER_COLUMNS).join(', ')}`);
+    throw new Error(
+      `Invalid order column: ${column}. Allowed: ${Array.from(ALLOWED_ORDER_COLUMNS).join(", ")}`,
+    );
   }
-  
+
   const normalizedDirection = direction.toUpperCase();
   if (!ALLOWED_SORT_DIRECTIONS.has(normalizedDirection)) {
     throw new Error(`Invalid sort direction: ${direction}. Allowed: ASC, DESC`);
   }
-  
+
   return { column, direction: normalizedDirection };
 }
 
@@ -396,31 +562,308 @@ const log = (
 /**
  * Log SQL queries with parameter redaction for security
  */
-function logQuery(query: string, params: unknown[] = [], operation: string): void {
+function logQuery(
+  query: string,
+  params: unknown[] = [],
+  operation: string,
+): void {
   // Redact sensitive parameters (keep first 4 chars for debugging)
   const redactedParams = params.map((param, index) => {
-    if (typeof param === 'string' && param.length > 8) {
+    if (typeof param === "string" && param.length > 8) {
       return `${param.slice(0, 4)}****[REDACTED]`;
     }
     return param;
   });
-  
-  log('debug', 'sql_query_executed', {
+
+  log("debug", "sql_query_executed", {
     operation,
-    query: query.replace(/\s+/g, ' ').trim(),
+    query: query.replace(/\s+/g, " ").trim(),
     paramCount: params.length,
-    redactedParams: redactedParams.slice(0, 5) // Limit to first 5 params
+    redactedParams: redactedParams.slice(0, 5), // Limit to first 5 params
   });
 }
 
 // ============================================
-// DATABASE INSTANCE
+// DATABASE INSTANCES (write + readonly read)
 // ============================================
 
-let db: DatabaseType | null = null;
+/** Write connection — indexer, sync, migrations, mutating API. */
+let writeDb: DatabaseType | null = null;
+/** Readonly connection — API query path (same file, WAL concurrent readers). */
+let readDb: DatabaseType | null = null;
+
+let activeDbFile: string = DB_FILE;
+let writeHealthy = true;
+let writeFailureReason: string | null = null;
+let lastWriteAtMs = 0;
 
 /** Cache of known partition tables (events_{daoId}) to avoid redundant DDL */
 const knownPartitions: Set<number> = new Set();
+
+export class WriteConnectionUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WriteConnectionUnavailableError";
+  }
+}
+
+function countActiveConnections(): number {
+  return (writeDb ? 1 : 0) + (readDb ? 1 : 0);
+}
+
+function updateConnectionGauges(): void {
+  const sink = metricsSink();
+  if (!sink) return;
+  try {
+    sink.setConnectionsActive(countActiveConnections());
+    sink.setWriteHealthy(writeHealthy && Boolean(writeDb));
+    sink.setWalSizeBytes(getWalSizeBytes(activeDbFile));
+  } catch {
+    // Metrics sink may throw if registry is torn down in tests
+  }
+}
+
+export function getWalSizeBytes(dbFile: string = activeDbFile): number {
+  const walPath = `${dbFile}-wal`;
+  try {
+    if (fs.existsSync(walPath)) return fs.statSync(walPath).size;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+function readDataVersion(database: DatabaseType): number {
+  const ver = database.pragma("data_version", { simple: true }) as
+    | number
+    | string;
+  return typeof ver === "number" ? ver : Number(ver) || 0;
+}
+
+/**
+ * Estimate how far the read connection lags the writer.
+ * Same-file WAL readers typically see lag ≈ 0 once the write commits;
+ * a version mismatch reports time since the last successful write.
+ */
+export function getReadReplicaLagMs(): number {
+  if (!writeDb || !readDb) return 0;
+  try {
+    const writeVer = readDataVersion(writeDb);
+    const readVer = readDataVersion(readDb);
+    if (writeVer === readVer) {
+      try {
+        metricsSink()?.setReadLagMs(0);
+      } catch {
+        /* ignore */
+      }
+      return 0;
+    }
+    const lag = lastWriteAtMs > 0 ? Math.max(0, Date.now() - lastWriteAtMs) : 0;
+    try {
+      metricsSink()?.setReadLagMs(lag);
+    } catch {
+      /* ignore */
+    }
+    return lag;
+  } catch {
+    return 0;
+  }
+}
+
+function markWriteSuccess(): void {
+  writeHealthy = true;
+  writeFailureReason = null;
+  lastWriteAtMs = Date.now();
+  updateConnectionGauges();
+  getReadReplicaLagMs();
+}
+
+function markWriteFailure(err: unknown): void {
+  writeHealthy = false;
+  writeFailureReason = err instanceof Error ? err.message : String(err);
+  log("error", "db_write_connection_failed", { error: writeFailureReason });
+  updateConnectionGauges();
+}
+
+function isConnectionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = (err as { code?: string })?.code ?? "";
+  return (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_LOCKED" ||
+    code === "SQLITE_IOERR" ||
+    code === "SQLITE_CANTOPEN" ||
+    code === "SQLITE_NOTADB" ||
+    /SQLITE_(BUSY|LOCKED|IOERR|CANTOPEN|CORRUPT)/i.test(msg) ||
+    /database is (locked|closed|not open)/i.test(msg)
+  );
+}
+
+function openWriteConnection(dbFile: string): DatabaseType {
+  const database = new Database(dbFile);
+  database.pragma("journal_mode = WAL");
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database.pragma("strict = ON");
+    log("info", "sqlite_strict_mode_enabled");
+  } catch (err) {
+    log("warn", "sqlite_strict_mode_unavailable", {
+      error: (err as Error).message,
+    });
+  }
+  return database;
+}
+
+function openReadConnection(dbFile: string): DatabaseType {
+  const database = new Database(dbFile, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database.pragma("query_only = ON");
+  } catch {
+    // query_only may be unavailable on older SQLite builds
+  }
+  return database;
+}
+
+/**
+ * Attempt to reopen the write connection after failure.
+ * Read connection is left open so API queries can continue in degraded mode.
+ */
+export function reconnectWriteDb(): boolean {
+  if (!activeDbFile) return false;
+  try {
+    if (writeDb) {
+      try {
+        writeDb.close();
+      } catch {
+        /* already closed */
+      }
+      writeDb = null;
+    }
+    writeDb = openWriteConnection(activeDbFile);
+    writeDb.prepare("SELECT 1").get();
+    markWriteSuccess();
+    try {
+      metricsSink()?.incWriteFailover("success");
+    } catch {
+      /* ignore */
+    }
+    log("info", "db_write_reconnect_success", { path: activeDbFile });
+    return true;
+  } catch (err) {
+    markWriteFailure(err);
+    try {
+      metricsSink()?.incWriteFailover("failure");
+    } catch {
+      /* ignore */
+    }
+    log("error", "db_write_reconnect_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/** Reopen the readonly connection (e.g. after restore / WAL truncate). */
+export function reopenReadDb(): void {
+  if (!activeDbFile || !fs.existsSync(activeDbFile)) return;
+  if (readDb) {
+    try {
+      readDb.close();
+    } catch {
+      /* ignore */
+    }
+    readDb = null;
+  }
+  try {
+    readDb = openReadConnection(activeDbFile);
+    updateConnectionGauges();
+    log("info", "db_read_reopened", { path: activeDbFile });
+  } catch (err) {
+    log("warn", "db_read_reopen_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export function isWriteConnectionHealthy(): boolean {
+  return Boolean(writeHealthy && writeDb);
+}
+
+export function getWriteFailureReason(): string | null {
+  return writeFailureReason;
+}
+
+/**
+ * Return the write connection (initializing if needed).
+ * On connection-level failure, attempts one reconnect (failover).
+ * Does not switch away from an already-open custom dbPath.
+ */
+export function getWriteDb(): DatabaseType {
+  if (writeDb) {
+    try {
+      writeDb.prepare("SELECT 1").get();
+      if (!writeHealthy) {
+        if (!reconnectWriteDb() || !writeDb) {
+          throw new WriteConnectionUnavailableError(
+            writeFailureReason ?? "write database unavailable",
+          );
+        }
+      }
+      return writeDb;
+    } catch (err) {
+      if (isConnectionError(err)) {
+        markWriteFailure(err);
+        if (reconnectWriteDb() && writeDb) return writeDb;
+      }
+      throw err instanceof Error
+        ? err
+        : new WriteConnectionUnavailableError(String(err));
+    }
+  }
+  initDb();
+  if (!writeDb) {
+    throw new WriteConnectionUnavailableError(
+      writeFailureReason ?? "write database is not initialized",
+    );
+  }
+  return writeDb;
+}
+
+/**
+ * Return the readonly connection for API queries.
+ * Falls back to the write connection if the read handle is unavailable
+ * (degraded mode) so GET endpoints keep serving.
+ */
+export function getReadDb(): DatabaseType {
+  if (readDb) {
+    try {
+      readDb.prepare("SELECT 1").get();
+      return readDb;
+    } catch {
+      reopenReadDb();
+      if (readDb) return readDb;
+    }
+  }
+  if (writeDb) {
+    reopenReadDb();
+    if (readDb) return readDb;
+    log("warn", "db_read_fallback_to_write");
+    return writeDb;
+  }
+  initDb();
+  if (readDb) return readDb;
+  if (writeDb) {
+    log("warn", "db_read_fallback_to_write");
+    return writeDb;
+  }
+  throw new Error("database is not initialized");
+}
 
 /**
  * Return the partition table name for a given DAO ID.
@@ -431,21 +874,35 @@ function partitionTableName(daoId: number): string {
   return `events_${validatedDaoId}`;
 }
 
+/** True if the DAO partition table exists (no DDL). Safe for readonly connections. */
+function partitionTableExists(database: DatabaseType, daoId: number): boolean {
+  if (knownPartitions.has(daoId)) return true;
+  const tableName = partitionTableName(daoId);
+  const row = database
+    .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?`)
+    .get(tableName) as { ok: number } | undefined;
+  if (row) {
+    knownPartitions.add(daoId);
+    return true;
+  }
+  return false;
+}
+
 /**
  * Ensure a partition table exists for the given DAO ID.
- * Idempotent — safe to call on every write.
+ * Idempotent — safe to call on every write. Always uses the write connection.
  * SECURITY: Uses validated table names and allowlisted event types.
  */
 function ensurePartitionTable(daoId: number): void {
   if (knownPartitions.has(daoId)) return;
-  const database = db as DatabaseType;
+  const database = getWriteDb();
   const tableName = partitionTableName(daoId); // This validates daoId
-  
+
   // SECURITY: Use allowlisted event types in CHECK constraint
   const allowedEventTypesString = Array.from(ALLOWED_EVENT_TYPES)
-    .map(type => `'${type}'`)
-    .join(',');
-  
+    .map((type) => `'${type}'`)
+    .join(",");
+
   const createTableSQL = `
     CREATE TABLE IF NOT EXISTS ${tableName} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -463,13 +920,14 @@ function ensurePartitionTable(daoId: number): void {
     CREATE INDEX IF NOT EXISTS idx_${tableName}_ledger ON ${tableName}(ledger DESC);
     CREATE INDEX IF NOT EXISTS idx_${tableName}_verified ON ${tableName}(verified);
   `;
-  
-  logQuery(createTableSQL, [], 'ensure_partition_table');
+
+  logQuery(createTableSQL, [], "ensure_partition_table");
   database.exec(createTableSQL);
-  
+
   knownPartitions.add(daoId);
   // Record this partition in metadata for cross-DAO queries
   recordPartitionDaoId(database, daoId);
+  markWriteSuccess();
 }
 
 /**
@@ -498,10 +956,51 @@ function getAllPartitionDaoIds(database: DatabaseType): number[] {
 
 /**
  * Initialize the database and migrate from the monolithic schema.
+ * Opens a write connection plus a readonly read connection on the same
+ * WAL-mode file for query isolation (issue #205).
  * SECURITY: Enables SQLite strict mode and WAL journaling.
+ * @returns The write connection (backward compatible with prior callers).
  */
 export function initDb(dbPath?: string): DatabaseType {
-  if (db && !dbPath) return db;
+  const dbFile = dbPath ?? DB_FILE;
+
+  // Reuse open handles for the same file
+  if (writeDb && activeDbFile === dbFile) {
+    try {
+      writeDb.prepare("SELECT 1").get();
+      return writeDb;
+    } catch {
+      try {
+        writeDb.close();
+      } catch {
+        /* ignore */
+      }
+      writeDb = null;
+      try {
+        readDb?.close();
+      } catch {
+        /* ignore */
+      }
+      readDb = null;
+    }
+  }
+
+  // Switching files (or reopening after close): drop prior handles
+  if (writeDb || readDb) {
+    try {
+      readDb?.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      writeDb?.close();
+    } catch {
+      /* ignore */
+    }
+    writeDb = null;
+    readDb = null;
+    knownPartitions.clear();
+  }
 
   if (!dbPath) {
     if (!fs.existsSync(DATA_DIR)) {
@@ -514,21 +1013,32 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
-  const dbFile = dbPath ?? DB_FILE;
-  const database = new Database(dbFile);
-  
+  activeDbFile = dbFile;
+  let database = new Database(dbFile);
+
   // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
-  
+
+  // WAL Resilience: configure and initialize
+  configureWalResilience({
+    busyTimeoutMs: config.dbBusyTimeoutMs,
+    checkpointIntervalMs: config.dbCheckpointIntervalMs,
+    checkpointTransactionCount: config.dbCheckpointTransactionCount,
+    walWarningThresholdBytes: config.dbWalWarningThresholdBytes,
+    backupIntervalMs: config.dbBackupIntervalMs,
+    retryCount: config.dbRetryCount,
+    retryBaseDelayMs: config.dbRetryBaseDelayMs,
+    retryMaxDelayMs: config.dbRetryMaxDelayMs,
+  });
+  initWalResilience(database, dbFile);
+
   // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
   try {
-    database.pragma("strict = ON");
-    log("info", "sqlite_strict_mode_enabled");
+    database = openWriteConnection(dbFile);
   } catch (err) {
-    log("warn", "sqlite_strict_mode_unavailable", {
-      error: (err as Error).message
-    });
+    markWriteFailure(err);
+    throw err;
   }
 
   // Create system tables (daos, metadata, partition_registry)
@@ -620,6 +1130,68 @@ export function initDb(dbPath?: string): DatabaseType {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS vote_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nullifier_hash TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'failed')),
+      tx_hash TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_vote_submissions_nullifier ON vote_submissions(nullifier_hash);
+
+    -- Auth tokens table: stores hashed authentication tokens with expiration and metadata
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT,
+      revoked_at TEXT,
+      last_used_at TEXT,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      rotation_group_id TEXT,
+      is_legacy INTEGER NOT NULL DEFAULT 0,
+      CHECK(status IN ('active', 'expired', 'revoked', 'rotating'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_token_hash ON auth_tokens(token_hash);
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_client_id ON auth_tokens(client_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_status ON auth_tokens(status);
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_expires_at ON auth_tokens(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_auth_tokens_rotation_group ON auth_tokens(rotation_group_id);
+
+    -- Auth token audit log: records all token operations and usage
+    CREATE TABLE IF NOT EXISTS auth_token_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_id TEXT,
+      client_id TEXT,
+      action TEXT NOT NULL,
+      path TEXT,
+      method TEXT,
+      ip_hash TEXT,
+      success INTEGER NOT NULL DEFAULT 1,
+      error_message TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_token_id ON auth_token_audit(token_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_client_id ON auth_token_audit(client_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_action ON auth_token_audit(action);
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_created_at ON auth_token_audit(created_at);
+    CREATE TABLE IF NOT EXISTS proof_commitments (
+      commitment_hash TEXT PRIMARY KEY,
+      nullifier TEXT NOT NULL,
+      dao_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      wallet_address TEXT,
+      timestamp INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commitments_nullifier ON proof_commitments(nullifier);
+    CREATE INDEX IF NOT EXISTS idx_commitments_wallet ON proof_commitments(wallet_address);
     -- Append-only, tamper-evident audit trail for privileged/administrative
     -- actions. Each row's hash covers its own fields plus the previous row's
     -- hash (hash chain), so any edit or reordering breaks verifyAuditChain().
@@ -728,7 +1300,8 @@ export function initDb(dbPath?: string): DatabaseType {
     });
   }
 
-  // Populate knownPartitions from the registry
+  // Populate knownPartitions from the active database registry.
+  knownPartitions.clear();
   const rows = database
     .prepare("SELECT dao_id FROM partition_registry")
     .all() as Array<{ dao_id: number }>;
@@ -767,19 +1340,35 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
-  if (!dbPath) {
-    db = database;
+  writeDb = database;
+  markWriteSuccess();
+
+  // Open readonly companion for API query isolation
+  // (prior handles already closed/nulled above when switching files)
+  try {
+    readDb = openReadConnection(dbFile);
+  } catch (err) {
+    log("warn", "db_read_connection_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    readDb = null;
   }
+
+  updateConnectionGauges();
 
   log("info", "db_initialized", {
     path: dbFile,
     partitions: knownPartitions.size,
+    readConnection: Boolean(readDb),
   });
   // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
   return database;
 }
 
 /**
+ * Return the initialized write database instance (initializing it if needed).
+ * Return the initialized database instance, initializing it if needed.
+ * Get active database instance or initialize default.
  * Return the initialized database instance (initializing it if needed).
  * archival.ts and backup.ts import this; it was missing from this module's
  * exports, which broke every route that transitively imports either of them
@@ -788,19 +1377,34 @@ export function initDb(dbPath?: string): DatabaseType {
  * from booting at all, including for verifying the changes in this PR.
  */
 export function getDb(): DatabaseType {
-  return initDb();
+  return getWriteDb();
 }
 
 /**
- * Close the database
+ * Close write and read database connections.
  */
 export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
+  if (readDb) {
+    try {
+      readDb.close();
+    } catch {
+      /* ignore */
+    }
+    readDb = null;
+  }
+  if (writeDb) {
+    try {
+      writeDb.close();
+    } catch {
+      /* ignore */
+    }
+    writeDb = null;
     knownPartitions.clear();
+    writeHealthy = true;
+    writeFailureReason = null;
     log("info", "db_closed");
   }
+  updateConnectionGauges();
 }
 
 // ============================================
@@ -963,7 +1567,7 @@ interface MetadataRow {
  * Get metadata value by key
  */
 export function getMetadata<T>(key: string): T | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = timeQuery(
     "getMetadata",
     () =>
@@ -979,17 +1583,24 @@ export function getMetadata<T>(key: string): T | null {
  * Set metadata value
  */
 export function setMetadata<T>(key: string, value: T): void {
-  const database = initDb();
+  const database = getWriteDb();
+  const compiled = kysely
+    .insertInto("metadata")
+    .values({ key, value: JSON.stringify(value) })
+    .onConflict((oc) =>
+      oc.column("key").doUpdateSet({ value: JSON.stringify(value) }),
+    )
+    .compile();
+
   timeQuery(
     "setMetadata",
-    () =>
-      database
-        .prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)")
-        .run(key, JSON.stringify(value)),
+    () => database.prepare(compiled.sql).run(...compiled.parameters),
     { key },
   );
   // Invalidate any cached queries that depend on metadata
   invalidateCachePrefix("metadata");
+  markWriteSuccess();
+  incrementTransactionCounter();
 }
 
 // ============================================
@@ -1036,7 +1647,7 @@ function rowToEvent(row: EventRow): Event {
  * SECURITY: Validates event type and uses parameterized queries.
  */
 export function addEvent(event: EventInput): boolean {
-  const database = initDb();
+  const database = getWriteDb();
   const tableName = partitionTableName(event.daoId); // Validates daoId
   ensurePartitionTable(event.daoId);
 
@@ -1045,30 +1656,46 @@ export function addEvent(event: EventInput): boolean {
     throw new Error(`Invalid event type: ${event.type}`);
   }
 
-  const query = `
-    INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `;
-  const params = [
-    event.type,
-    JSON.stringify(event.data),
-    event.ledger ?? null,
-    event.txHash ?? null,
-    event.timestamp ?? new Date().toISOString(),
-    event.verified ? 1 : 0,
-  ];
+  // NOTE (pre-existing bug, found while adding sbt_transfer_attempt events
+  // for #357): kysely@0.29's insertInto() calls `from.includes(...)`
+  // internally, so it requires a plain string table identifier — passing a
+  // `sql\`...\`.as(...)` raw expression throws "from.includes is not a
+  // function" and every addEvent() call fails. `tableName` is already a
+  // safe, validated identifier (partitionTableName() derives it from a
+  // range-checked numeric DAO ID), so a plain string is correct here anyway.
+  const queryObj = (kysely as any).insertInto(tableName).values({
+    type: event.type,
+    data: JSON.stringify(event.data),
+    ledger: event.ledger ?? null,
+    tx_hash: event.txHash ?? null,
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    verified: event.verified ? 1 : 0,
+  });
+  const compiled = queryObj.compile();
 
   const result = timeQuery(
     "addEvent",
     () => {
       try {
-        logQuery(query, params, 'add_event');
-        database.prepare(query).run(...params);
+        logQuery(compiled.sql, compiled.parameters as any[], "add_event");
+        database.prepare(compiled.sql).run(...compiled.parameters);
+        markWriteSuccess();
         return true;
       } catch (err) {
         const error = err as { code?: string };
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
           return false; // Duplicate
+        }
+        if (isConnectionError(err)) {
+          markWriteFailure(err);
+          if (reconnectWriteDb()) {
+            ensurePartitionTable(event.daoId);
+            getWriteDb()
+              .prepare(compiled.sql)
+              .run(...compiled.parameters);
+            markWriteSuccess();
+            return true;
+          }
         }
         throw err;
       }
@@ -1080,6 +1707,7 @@ export function addEvent(event: EventInput): boolean {
   if (result) {
     invalidateCachePrefix(`indexedDaos`);
     invalidateCachePrefix(`dbStatus`);
+    incrementTransactionCounter();
   }
 
   return result;
@@ -1111,23 +1739,36 @@ export function addPendingEvent(
  * SECURITY: Uses parameterized queries and validates inputs.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128 ||
+    !/^[A-Za-z0-9_-]+$/.test(txHash)
+  ) {
+    throw new Error("Invalid transaction hash");
+  }
+
   // SECURITY: Basic input validation
-  if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128
+  ) {
     throw new Error(`Invalid txHash: ${txHash}`);
   }
   if (!Number.isInteger(ledger) || ledger < 0) {
     throw new Error(`Invalid ledger: ${ledger}`);
   }
 
-  const database = initDb();
+  const database = getWriteDb();
   // Search in all partitions for the matching tx_hash
   const daoIds = getAllPartitionDaoIds(database);
   for (const daoId of daoIds) {
     const tableName = partitionTableName(daoId); // Validates daoId
     const query = `UPDATE ${tableName} SET verified = 1, ledger = ? WHERE tx_hash = ? AND verified = 0`;
     const params = [ledger, txHash];
-    
-    logQuery(query, params, 'verify_event');
+
+    logQuery(query, params, "verify_event");
     const result = database.prepare(query).run(...params);
     if (result.changes > 0) return; // Done
   }
@@ -1135,23 +1776,30 @@ export function verifyEvent(txHash: string, ledger: number): void {
 
 /**
  * Get events for a DAO (from its partition).
+ * Supports both cursor-based and offset-based pagination.
  * SECURITY: Uses parameterized queries and validates all inputs.
  */
 export function getEventsForDao(
   daoId: number,
   options: EventQueryOptions = {},
 ): EventQueryResult {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId); // Validates daoId
-  ensurePartitionTable(daoId);
+
+  // Reads must not run DDL — missing partitions return empty results.
+  if (!partitionTableExists(database, daoId)) {
+    return { events: [], total: 0, daoId };
+  }
 
   const {
-    limit = 50,
+    limit = 100,
     offset = 0,
     types = null,
     verifiedOnly = false,
-    orderBy = 'timestamp',
-    orderDirection = 'DESC'
+    orderBy = "timestamp",
+    orderDirection = "DESC",
+    cursor,
+    cursorField = "id",
   } = options;
 
   // SECURITY: Validate limit and offset
@@ -1159,46 +1807,73 @@ export function getEventsForDao(
   const validOffset = Math.max(0, offset);
 
   // SECURITY: Validate ORDER BY parameters
-  const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
+  const { column: orderColumn, direction } = validateOrderBy(
+    orderBy,
+    orderDirection,
+  );
 
-  let query = `SELECT * FROM ${tableName} WHERE 1=1`;
-  const params: (number | string)[] = [];
+  let query = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .selectAll();
 
   if (types && types.length > 0) {
-    // SECURITY: Validate event types against allowlist
     const validatedTypes = validateEventTypes(types);
-    query += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    params.push(...validatedTypes);
+    query = query.where("type", "in", validatedTypes);
   }
 
   if (verifiedOnly) {
-    query += " AND verified = 1";
+    query = query.where("verified", "=", 1);
   }
 
-  query += ` ORDER BY ${orderColumn} ${direction}, ledger DESC LIMIT ? OFFSET ?`;
-  params.push(validLimit, validOffset);
+  // Cursor-based pagination: filter for records after the cursor position
+  if (cursor) {
+    const decoded = decodeCursor(cursor, cursorField);
+    if (cursorField === "id") {
+      query = query.where("id", ">", decoded.i as number);
+    } else if (cursorField === "ledger") {
+      query = query.where("ledger", ">", decoded.l as number);
+    } else if (cursorField === "timestamp") {
+      query = query.where("timestamp", ">", decoded.t as string);
+    }
+  } else {
+    query = query.offset(validOffset);
+  }
 
-  logQuery(query, params, 'get_events_for_dao');
-  const events = database.prepare(query).all(...params) as EventRow[];
+  query = query
+    .orderBy(orderColumn as any, direction.toLowerCase() as any)
+    .orderBy("ledger", "desc")
+    .limit(validLimit);
+
+  const compiled = query.compile();
+
+  logQuery(compiled.sql, compiled.parameters as any[], "get_events_for_dao");
+  const events = database
+    .prepare(compiled.sql)
+    .all(...compiled.parameters) as EventRow[];
 
   // Add dao_id to each row (partition tables don't store it)
   const enrichedEvents = events.map((e) => ({ ...e, dao_id: daoId }));
 
-  let countQuery = `SELECT COUNT(*) as total FROM ${tableName} WHERE 1=1`;
-  const countParams: (number | string)[] = [];
+  let countQuery = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .select(sql<number>`COUNT(*)`.as("total"));
+
   if (types && types.length > 0) {
-    const validatedTypes = validateEventTypes(types);
-    countQuery += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    countParams.push(...validatedTypes);
+    countQuery = countQuery.where("type", "in", validateEventTypes(types));
   }
   if (verifiedOnly) {
-    countQuery += " AND verified = 1";
+    countQuery = countQuery.where("verified", "=", 1);
   }
 
-  logQuery(countQuery, countParams, 'count_events_for_dao');
+  const countCompiled = countQuery.compile();
+  logQuery(
+    countCompiled.sql,
+    countCompiled.parameters as any[],
+    "count_events_for_dao",
+  );
   const countResult = database
-    .prepare(countQuery)
-    .get(...countParams) as CountRow;
+    .prepare(countCompiled.sql)
+    .get(...countCompiled.parameters) as CountRow;
 
   return {
     events: enrichedEvents.map(rowToEvent),
@@ -1211,7 +1886,7 @@ export function getEventsForDao(
  * Get all indexed DAOs (with event counts from partitions).
  */
 export function getIndexedDaos(): IndexedDao[] {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
   if (daoIds.length === 0) return [];
 
@@ -1238,7 +1913,7 @@ export function getIndexedDaos(): IndexedDao[] {
  * Get database status (cross-DAO aggregates).
  */
 export function getDbStatus(): DbStatus {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
 
   let totalEvents = 0;
@@ -1263,6 +1938,10 @@ export function getDbStatus(): DbStatus {
     totalEvents,
     daoCount,
     lastLedger,
+    walSizeBytes: getWalSizeBytes(),
+    readLagMs: getReadReplicaLagMs(),
+    writeHealthy: isWriteConnectionHealthy(),
+    connectionsActive: countActiveConnections(),
   };
 }
 
@@ -1271,7 +1950,7 @@ export function getDbStatus(): DbStatus {
  * Searches across all partitions.
  */
 export function getUnverifiedEvents(limit = 10): Event[] {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
   if (daoIds.length === 0) return [];
 
@@ -1295,7 +1974,7 @@ export function getUnverifiedEvents(limit = 10): Event[] {
  * Delete an unverified event (if verification fails).
  */
 export function deleteUnverifiedEvent(txHash: string): void {
-  const database = initDb();
+  const database = getWriteDb();
   const daoIds = getAllPartitionDaoIds(database);
   for (const daoId of daoIds) {
     const tableName = partitionTableName(daoId);
@@ -1321,8 +2000,10 @@ export interface TransactionLogRow {
 /**
  * Get transaction log by nullifier hash.
  */
-export function getTransactionLog(nullifierHash: string): TransactionLogRow | null {
-  const database = initDb();
+export function getTransactionLog(
+  nullifierHash: string,
+): TransactionLogRow | null {
+  const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM transaction_log WHERE nullifier_hash = ?")
     .get(nullifierHash) as TransactionLogRow | undefined;
@@ -1337,7 +2018,7 @@ export function recordTransactionLog(
   txHash: string,
   status: string = "PENDING",
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `INSERT INTO transaction_log (nullifier_hash, tx_hash, status, created_at, updated_at)
@@ -1348,6 +2029,7 @@ export function recordTransactionLog(
          updated_at = CURRENT_TIMESTAMP`,
     )
     .run(nullifierHash, txHash, status);
+  incrementTransactionCounter();
 }
 
 /**
@@ -1358,7 +2040,7 @@ export function updateTransactionLogStatus(
   status: string,
   txHash?: string,
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   if (txHash) {
     database
       .prepare(
@@ -1378,10 +2060,91 @@ export function updateTransactionLogStatus(
  * Cleanup old transaction log entries.
  */
 export function cleanupTransactionLog(maxAgeMs = 86400000): number {
-  const database = initDb();
+  const database = getWriteDb();
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
   const result = database
     .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
+    .run(cutoff);
+  return result.changes;
+}
+
+// ============================================
+// VOTE SUBMISSIONS (idempotency table)
+// ============================================
+
+export interface VoteSubmissionRow {
+  id: number;
+  nullifier_hash: string;
+  status: "pending" | "confirmed" | "failed";
+  tx_hash: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Look up an existing vote submission by nullifier hash.
+ */
+export function getVoteSubmission(
+  nullifierHash: string,
+): VoteSubmissionRow | null {
+  const database = getReadDb();
+  const row = database
+    .prepare("SELECT * FROM vote_submissions WHERE nullifier_hash = ?")
+    .get(nullifierHash) as VoteSubmissionRow | undefined;
+  return row ?? null;
+}
+
+/**
+ * Insert a new pending vote submission. Returns false if nullifier already exists (idempotency race).
+ */
+export function insertVoteSubmission(nullifierHash: string): boolean {
+  const database = getWriteDb();
+  const now = Date.now();
+  const result = database
+    .prepare(
+      "INSERT OR IGNORE INTO vote_submissions (nullifier_hash, status, tx_hash, created_at, updated_at) VALUES (?, 'pending', NULL, ?, ?)",
+    )
+    .run(nullifierHash, now, now);
+  if (result.changes > 0) incrementTransactionCounter();
+  return result.changes > 0;
+}
+
+/**
+ * Update an existing vote submission to confirmed or failed.
+ */
+export function updateVoteSubmission(
+  nullifierHash: string,
+  status: "confirmed" | "failed",
+  txHash?: string,
+): void {
+  const database = getWriteDb();
+  const now = Date.now();
+  if (txHash) {
+    database
+      .prepare(
+        "UPDATE vote_submissions SET status = ?, tx_hash = ?, updated_at = ? WHERE nullifier_hash = ?",
+      )
+      .run(status, txHash, now, nullifierHash);
+  } else {
+    database
+      .prepare(
+        "UPDATE vote_submissions SET status = ?, updated_at = ? WHERE nullifier_hash = ?",
+      )
+      .run(status, now, nullifierHash);
+  }
+  incrementTransactionCounter();
+}
+
+/**
+ * Delete vote submissions older than ttlMs whose status is not confirmed.
+ */
+export function cleanupExpiredVoteSubmissions(ttlMs: number): number {
+  const database = getWriteDb();
+  const cutoff = Date.now() - ttlMs;
+  const result = database
+    .prepare(
+      "DELETE FROM vote_submissions WHERE status != 'confirmed' AND created_at < ?",
+    )
     .run(cutoff);
   return result.changes;
 }
@@ -1429,7 +2192,7 @@ export interface AuditLogQueryOptions {
  * so concurrent inserts can't interleave and desync the chain.
  */
 export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
-  const database = initDb();
+  const database = getWriteDb();
 
   const insert = database.transaction((e: AuditLogInput): AuditLogRow => {
     const last = database
@@ -1495,10 +2258,11 @@ export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
 /**
  * Paginated audit log query (newest first), optionally filtered by action.
  */
-export function getAuditLogs(
-  options: AuditLogQueryOptions = {},
-): { logs: AuditLogRow[]; total: number } {
-  const database = initDb();
+export function getAuditLogs(options: AuditLogQueryOptions = {}): {
+  logs: AuditLogRow[];
+  total: number;
+} {
+  const database = getReadDb();
   const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
   const offset = Math.max(0, options.offset ?? 0);
 
@@ -1528,7 +2292,7 @@ export function getAuditLogs(
  * All audit log rows in insertion order, for hash-chain verification.
  */
 export function getAllAuditLogsOrdered(): AuditLogRow[] {
-  const database = initDb();
+  const database = getReadDb();
   return database
     .prepare("SELECT * FROM audit_log ORDER BY id ASC")
     .all() as AuditLogRow[];
@@ -1540,7 +2304,7 @@ export function getAllAuditLogsOrdered(): AuditLogRow[] {
 export function getUnarchivedAuditLogsOlderThan(
   cutoffIso: string,
 ): AuditLogRow[] {
-  const database = initDb();
+  const database = getReadDb();
   return database
     .prepare(
       "SELECT * FROM audit_log WHERE archived_at IS NULL AND timestamp < ? ORDER BY id ASC",
@@ -1554,7 +2318,7 @@ export function getUnarchivedAuditLogsOlderThan(
  */
 export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
   if (ids.length === 0) return;
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare(
     "UPDATE audit_log SET archived_at = ? WHERE id = ?",
   );
@@ -1570,7 +2334,7 @@ export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
  */
 export function deleteAuditLogs(ids: number[]): number {
   if (ids.length === 0) return 0;
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare("DELETE FROM audit_log WHERE id = ?");
   const run = database.transaction((rowIds: number[]) => {
     let deleted = 0;
@@ -1584,9 +2348,9 @@ export function deleteAuditLogs(ids: number[]): number {
  * Count pending (unverified) events for a specific DAO.
  */
 export function getPendingEventsCountForDao(daoId: number): number {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId);
-  ensurePartitionTable(daoId);
+  if (!partitionTableExists(database, daoId)) return 0;
   const row = database
     .prepare(`SELECT COUNT(*) as count FROM ${tableName} WHERE verified = 0`)
     .get() as { count: number };
@@ -1597,7 +2361,7 @@ export function getPendingEventsCountForDao(daoId: number): number {
  * Cleanup expired unverified pending events across partitions older than ttlMs.
  */
 export function cleanupExpiredPendingEvents(ttlMs = 15 * 60 * 1000): number {
-  const database = initDb();
+  const database = getWriteDb();
   const daoIds = getAllPartitionDaoIds(database);
   const cutoff = new Date(Date.now() - ttlMs).toISOString();
   let deletedCount = 0;
@@ -1620,7 +2384,7 @@ export function cleanupExpiredPendingEvents(ttlMs = 15 * 60 * 1000): number {
  * Public version — call this when a new DAO is created.
  */
 export function ensurePartition(daoId: number): void {
-  initDb();
+  getWriteDb();
   ensurePartitionTable(daoId);
   log("info", "partition_created", { daoId });
 }
@@ -1630,7 +2394,7 @@ export function ensurePartition(daoId: number): void {
  * Removes the DAO from the registry as well.
  */
 export function dropPartition(daoId: number): void {
-  const database = initDb();
+  const database = getWriteDb();
   const tableName = partitionTableName(daoId);
 
   database.exec(`DROP TABLE IF EXISTS ${tableName}`);
@@ -1653,7 +2417,7 @@ export function dropPartition(daoId: number): void {
  * Returns the number of events migrated.
  */
 export function migrateToPartitions(): number {
-  const database = initDb();
+  const database = getWriteDb();
 
   // Check if there are any rows in the old events table
   const oldCount = database
@@ -1744,7 +2508,7 @@ export function migrateToPartitions(): number {
  * SECURITY: Validates all JSON input and uses parameterized queries.
  */
 export function migrateFromJson(jsonPath: string): number {
-  const database = initDb();
+  const database = getWriteDb();
 
   if (!fs.existsSync(jsonPath)) {
     log("info", "no_json_to_migrate");
@@ -1776,7 +2540,7 @@ export function migrateFromJson(jsonPath: string): number {
           log("warn", "json_migration_invalid_dao_id", { daoIdStr });
           continue;
         }
-        
+
         const tableName = partitionTableName(daoId); // This validates daoId
         ensurePartitionTable(daoId);
 
@@ -1790,19 +2554,23 @@ export function migrateFromJson(jsonPath: string): number {
           try {
             // SECURITY: Validate event type
             if (!ALLOWED_EVENT_TYPES.has(event.type)) {
-              log("warn", "json_migration_invalid_event_type", { 
-                type: event.type, 
-                daoId 
+              log("warn", "json_migration_invalid_event_type", {
+                type: event.type,
+                daoId,
               });
               continue;
             }
 
             // SECURITY: Validate timestamp format if provided
             const timestamp = event.timestamp ?? new Date().toISOString();
-            if (event.timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp)) {
-              log("warn", "json_migration_invalid_timestamp", { 
-                timestamp: event.timestamp, 
-                daoId 
+            if (
+              event.timestamp &&
+              (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
+                Number.isNaN(Date.parse(event.timestamp)))
+            ) {
+              log("warn", "json_migration_invalid_timestamp", {
+                timestamp: event.timestamp,
+                daoId,
               });
               continue;
             }
@@ -1815,14 +2583,14 @@ export function migrateFromJson(jsonPath: string): number {
               timestamp,
             ];
 
-            logQuery(insertQuery, params, 'migrate_from_json');
+            logQuery(insertQuery, params, "migrate_from_json");
             insertStmt.run(...params);
             migrated++;
           } catch (err) {
-            log("warn", "json_migration_event_failed", { 
+            log("warn", "json_migration_event_failed", {
               error: (err as Error).message,
               daoId,
-              eventType: event.type 
+              eventType: event.type,
             });
             // Skip this event and continue
           }
@@ -1830,7 +2598,11 @@ export function migrateFromJson(jsonPath: string): number {
       }
 
       // Save last ledger
-      if (data.lastLedger && Number.isInteger(data.lastLedger) && data.lastLedger > 0) {
+      if (
+        data.lastLedger &&
+        Number.isInteger(data.lastLedger) &&
+        data.lastLedger > 0
+      ) {
         setMetadata("lastLedger", data.lastLedger);
       }
     })();
@@ -1857,7 +2629,7 @@ export function migrateFromJson(jsonPath: string): number {
  * Includes query metrics, table statistics, cache stats, and index analysis.
  */
 export function getDbDiagnostics(): Record<string, unknown> {
-  const database = initDb();
+  const database = getReadDb();
   const stats = getMonitorDbStats(database);
 
   // Profile event queries for large DAOs (10K+ events)
@@ -1876,6 +2648,13 @@ export function getDbDiagnostics(): Record<string, unknown> {
     config: stats.config,
     partitions: knownPartitions.size,
     largeDaos: largeDaos.length,
+    readReplica: {
+      lagMs: getReadReplicaLagMs(),
+      writeHealthy: isWriteConnectionHealthy(),
+      connectionsActive: countActiveConnections(),
+      walSizeBytes: getWalSizeBytes(),
+      writeFailureReason,
+    },
   };
 }
 
@@ -1883,7 +2662,7 @@ export function getDbDiagnostics(): Record<string, unknown> {
  * Profile queries for a specific DAO partition (for diagnostics).
  */
 export function profileDaoQueries(daoId: number): void {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId);
   const tableExists = database
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
@@ -1912,7 +2691,7 @@ interface DaoRow {
  * Upsert a DAO into the cache
  */
 export function upsertDao(dao: DaoInput): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `
@@ -1937,13 +2716,14 @@ export function upsertDao(dao: DaoInput): void {
       dao.metadata_cid ?? null,
       dao.member_count ?? 0,
     );
+  incrementTransactionCounter();
 }
 
 /**
  * Upsert multiple DAOs in a transaction
  */
 export function upsertDaos(daos: DaoInput[]): void {
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare(`
     INSERT INTO daos (id, name, creator, membership_open, members_can_propose, metadata_cid, member_count, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -1972,13 +2752,14 @@ export function upsertDaos(daos: DaoInput[]): void {
   })();
 
   log("info", "daos_upserted", { count: daos.length });
+  incrementTransactionCounter();
 }
 
 /**
  * Get all cached DAOs
  */
 export function getAllCachedDaos(): DaoCache[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM daos ORDER BY id ASC")
     .all() as DaoRow[];
@@ -1998,7 +2779,7 @@ export function getAllCachedDaos(): DaoCache[] {
  * Get a specific cached DAO by ID
  */
 export function getCachedDao(daoId: number): DaoCache | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = database.prepare("SELECT * FROM daos WHERE id = ?").get(daoId) as
     | DaoRow
     | undefined;
@@ -2042,7 +2823,7 @@ export function setDaosSyncTime(timestamp: string): void {
  * Get cached DAO count
  */
 export function getCachedDaoCount(): number {
-  const database = initDb();
+  const database = getReadDb();
   const result = database
     .prepare("SELECT COUNT(*) as count FROM daos")
     .get() as { count: number };
@@ -2076,7 +2857,7 @@ export interface TTLCostLogEntry {
 }
 
 export function upsertTTLTracking(entry: TTLTrackingEntry): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `
@@ -2103,7 +2884,7 @@ export function upsertTTLTracking(entry: TTLTrackingEntry): void {
 }
 
 export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM ttl_tracking WHERE entry_id = ?")
     .get(entryId) as Record<string, unknown> | undefined;
@@ -2120,7 +2901,7 @@ export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
 }
 
 export function getAllTTLTracking(): TTLTrackingEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM ttl_tracking ORDER BY remaining_ledgers ASC")
     .all() as Record<string, unknown>[];
@@ -2136,7 +2917,7 @@ export function getAllTTLTracking(): TTLTrackingEntry[] {
 }
 
 export function getGracePeriodEntries(): TTLTrackingEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare(
       "SELECT * FROM ttl_tracking WHERE urgency = 'grace' ORDER BY remaining_ledgers ASC",
@@ -2154,7 +2935,7 @@ export function getGracePeriodEntries(): TTLTrackingEntry[] {
 }
 
 export function createTTLCostLog(cycleId: string, cycleStart: string): number {
-  const database = initDb();
+  const database = getWriteDb();
   const result = database
     .prepare(
       `
@@ -2177,7 +2958,7 @@ export function updateTTLCostLog(
     status: string;
   }>,
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   const sets: string[] = [];
   const values: unknown[] = [];
 
@@ -2214,7 +2995,7 @@ export function updateTTLCostLog(
 }
 
 export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM ttl_cost_log ORDER BY id DESC LIMIT ?")
     .all(limit) as Record<string, unknown>[];
@@ -2232,11 +3013,469 @@ export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
 }
 
 export function getTotalTTLCostXLM(): number {
-  const database = initDb();
+  const database = getReadDb();
   const row = database
     .prepare(
       "SELECT COALESCE(SUM(total_fee_xlm), 0) as total FROM ttl_cost_log WHERE status = 'completed'",
     )
     .get() as { total: number };
   return row.total;
+}
+
+// ============================================
+// AUTH TOKEN FUNCTIONS
+// ============================================
+
+export interface AuthToken {
+  id: string;
+  tokenHash: string;
+  clientId: string;
+  description: string | null;
+  status: "active" | "expired" | "revoked" | "rotating";
+  createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  useCount: number;
+  rotationGroupId: string | null;
+  isLegacy: boolean;
+}
+
+export interface AuthTokenAuditEntry {
+  id: number;
+  tokenId: string | null;
+  clientId: string | null;
+  action: string;
+  path: string | null;
+  method: string | null;
+  ipHash: string | null;
+  success: boolean;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+function rowToAuthToken(row: Record<string, unknown>): AuthToken {
+  return {
+    id: row.id as string,
+    tokenHash: row.token_hash as string,
+    clientId: row.client_id as string,
+    description: (row.description as string) ?? null,
+    status: row.status as AuthToken["status"],
+    createdAt: row.created_at as string,
+    expiresAt: (row.expires_at as string) ?? null,
+    revokedAt: (row.revoked_at as string) ?? null,
+    lastUsedAt: (row.last_used_at as string) ?? null,
+    useCount: Number(row.use_count) || 0,
+    rotationGroupId: (row.rotation_group_id as string) ?? null,
+    isLegacy: !!row.is_legacy,
+  };
+}
+
+export function createAuthToken(token: {
+  id: string;
+  tokenHash: string;
+  clientId: string;
+  description?: string | null;
+  expiresAt?: string | null;
+  rotationGroupId?: string | null;
+  isLegacy?: boolean;
+}): void {
+  const database = initDb();
+  const query = `
+    INSERT INTO auth_tokens (id, token_hash, client_id, description, expires_at, rotation_group_id, is_legacy)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `;
+  const params = [
+    token.id,
+    token.tokenHash,
+    token.clientId,
+    token.description ?? null,
+    token.expiresAt ?? null,
+    token.rotationGroupId ?? null,
+    token.isLegacy ? 1 : 0,
+  ];
+  logQuery(query, params, "create_auth_token");
+  database.prepare(query).run(...params);
+}
+
+export function getAuthTokenByHash(tokenHash: string): AuthToken | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM auth_tokens WHERE token_hash = ?")
+    .get(tokenHash) as Record<string, unknown> | undefined;
+  return row ? rowToAuthToken(row) : null;
+}
+
+export function getAuthTokenById(id: string): AuthToken | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM auth_tokens WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? rowToAuthToken(row) : null;
+}
+
+export function getAllAuthTokens(): AuthToken[] {
+  const database = initDb();
+  const rows = database
+    .prepare("SELECT * FROM auth_tokens ORDER BY created_at DESC")
+    .all() as Record<string, unknown>[];
+  return rows.map(rowToAuthToken);
+}
+
+export function getActiveAuthTokens(): AuthToken[] {
+  const now = new Date().toISOString();
+  const database = initDb();
+  const rows = database
+    .prepare(
+      `SELECT * FROM auth_tokens 
+       WHERE status = 'active' 
+       AND (expires_at IS NULL OR expires_at > ?)
+       ORDER BY created_at DESC`,
+    )
+    .all(now) as Record<string, unknown>[];
+  return rows.map(rowToAuthToken);
+}
+
+export function getValidAuthTokens(transitionMs: number): AuthToken[] {
+  const now = new Date().toISOString();
+  const transitionCutoff = new Date(Date.now() - transitionMs).toISOString();
+  const database = initDb();
+  const rows = database
+    .prepare(
+      `SELECT * FROM auth_tokens 
+       WHERE (
+         status = 'active' 
+         AND (expires_at IS NULL OR expires_at > ?)
+       ) OR (
+         status = 'rotating'
+         AND revoked_at IS NOT NULL
+         AND revoked_at > ?
+       )
+       ORDER BY created_at DESC`,
+    )
+    .all(now, transitionCutoff) as Record<string, unknown>[];
+  return rows.map(rowToAuthToken);
+}
+
+export function updateAuthTokenStatus(
+  id: string,
+  status: AuthToken["status"],
+): void {
+  const database = initDb();
+  const query = "UPDATE auth_tokens SET status = ? WHERE id = ?";
+  logQuery(query, [status, id], "update_auth_token_status");
+  database.prepare(query).run(status, id);
+}
+
+export function revokeAuthToken(id: string): void {
+  const database = initDb();
+  const query =
+    "UPDATE auth_tokens SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE id = ?";
+  logQuery(query, [id], "revoke_auth_token");
+  database.prepare(query).run(id);
+}
+
+export function markTokenRotated(oldId: string, newId: string): void {
+  const database = initDb();
+  database.transaction(() => {
+    // Mark old token as rotating
+    database
+      .prepare(
+        "UPDATE auth_tokens SET status = 'rotating', revoked_at = CURRENT_TIMESTAMP WHERE id = ?",
+      )
+      .run(oldId);
+    // New token is already inserted by caller with same rotation_group_id
+  })();
+}
+
+export function recordTokenUsage(id: string, ipHash: string | null): void {
+  const database = initDb();
+  const query =
+    "UPDATE auth_tokens SET last_used_at = CURRENT_TIMESTAMP, use_count = use_count + 1 WHERE id = ?";
+  logQuery(query, [id], "record_token_usage");
+  database.prepare(query).run(id);
+}
+
+export function expireAuthTokens(): number {
+  const now = new Date().toISOString();
+  const database = initDb();
+  const query = `
+    UPDATE auth_tokens SET status = 'expired' 
+    WHERE status = 'active' 
+    AND expires_at IS NOT NULL 
+    AND expires_at <= ?
+  `;
+  logQuery(query, [now], "expire_auth_tokens");
+  const result = database.prepare(query).run(now);
+  return result.changes;
+}
+
+export function cleanupRevokedTokens(maxAgeMs = 7_776_000_000): number {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const database = initDb();
+  const query = `
+    DELETE FROM auth_tokens 
+    WHERE status IN ('revoked', 'expired', 'rotating') 
+    AND revoked_at IS NOT NULL 
+    AND revoked_at < ?
+  `;
+  logQuery(query, [cutoff], "cleanup_revoked_tokens");
+  const result = database.prepare(query).run(cutoff);
+  return result.changes;
+}
+
+export function getAuthTokensByClient(clientId: string): AuthToken[] {
+  const database = initDb();
+  const rows = database
+    .prepare(
+      "SELECT * FROM auth_tokens WHERE client_id = ? ORDER BY created_at DESC",
+    )
+    .all(clientId) as Record<string, unknown>[];
+  return rows.map(rowToAuthToken);
+}
+
+export function getTokensNeedingRotation(maxAgeMs: number): AuthToken[] {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const database = initDb();
+  const rows = database
+    .prepare(
+      `SELECT * FROM auth_tokens 
+       WHERE status = 'active' 
+       AND is_legacy = 0
+       AND created_at < ?
+       AND (rotation_group_id IS NULL OR id IN (
+         SELECT MIN(id) FROM auth_tokens WHERE rotation_group_id IS NOT NULL GROUP BY rotation_group_id
+       ))
+       ORDER BY created_at ASC`,
+    )
+    .all(cutoff) as Record<string, unknown>[];
+  return rows.map(rowToAuthToken);
+}
+
+// ============================================
+// AUTH TOKEN AUDIT LOG FUNCTIONS
+// ============================================
+
+function rowToAuditEntry(row: Record<string, unknown>): AuthTokenAuditEntry {
+  return {
+    id: Number(row.id),
+    tokenId: (row.token_id as string) ?? null,
+    clientId: (row.client_id as string) ?? null,
+    action: row.action as string,
+    path: (row.path as string) ?? null,
+    method: (row.method as string) ?? null,
+    ipHash: (row.ip_hash as string) ?? null,
+    success: !!row.success,
+    errorMessage: (row.error_message as string) ?? null,
+    createdAt: (row.created_at as string) ?? null,
+  };
+}
+
+// PROOF COMMITMENT STORAGE
+// ============================================
+
+export interface ProofCommitmentRecord {
+  commitmentHash: string;
+  nullifier: string;
+  daoId: number;
+  proposalId: number;
+  walletAddress?: string | null;
+  timestamp: number;
+  status: "COMMITTED" | "REVEALED" | "EXPIRED";
+  createdAt: string;
+}
+
+export function recordProofCommitment(
+  commitmentHash: string,
+  nullifier: string,
+  daoId: number,
+  proposalId: number,
+  timestamp: number,
+  walletAddress?: string | null,
+): void {
+  const database = initDb();
+  const createdAt = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO proof_commitments (commitment_hash, nullifier, dao_id, proposal_id, wallet_address, timestamp, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?)
+       ON CONFLICT(commitment_hash) DO UPDATE SET timestamp = excluded.timestamp, status = 'COMMITTED'`,
+    )
+    .run(
+      commitmentHash,
+      nullifier,
+      daoId,
+      proposalId,
+      walletAddress || null,
+      timestamp,
+      createdAt,
+    );
+}
+
+export function getProofCommitment(
+  commitmentHash: string,
+): ProofCommitmentRecord | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM proof_commitments WHERE commitment_hash = ?")
+    .get(commitmentHash) as Record<string, unknown> | undefined;
+
+  if (!row) return null;
+
+  return {
+    commitmentHash: row.commitment_hash as string,
+    nullifier: row.nullifier as string,
+    daoId: row.dao_id as number,
+    proposalId: row.proposal_id as number,
+    walletAddress: row.wallet_address as string | null,
+    timestamp: row.timestamp as number,
+    status: row.status as "COMMITTED" | "REVEALED" | "EXPIRED",
+    createdAt: row.created_at as string,
+  };
+}
+
+export function recordAuthAudit(entry: {
+  tokenId?: string | null;
+  clientId?: string | null;
+  action: string;
+  path?: string | null;
+  method?: string | null;
+  ipHash?: string | null;
+  success?: boolean;
+  errorMessage?: string | null;
+}): void {
+  const database = initDb();
+  const query = `
+    INSERT INTO auth_token_audit (token_id, client_id, action, path, method, ip_hash, success, error_message)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  const params = [
+    entry.tokenId ?? null,
+    entry.clientId ?? null,
+    entry.action,
+    entry.path ?? null,
+    entry.method ?? null,
+    entry.ipHash ?? null,
+    entry.success !== false ? 1 : 0,
+    entry.errorMessage ?? null,
+  ];
+  database.prepare(query).run(...params);
+}
+
+export function getAuditLog(
+  options: {
+    tokenId?: string;
+    clientId?: string;
+    action?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): AuthTokenAuditEntry[] {
+  const { tokenId, clientId, action, limit = 100, offset = 0 } = options;
+  const database = initDb();
+
+  let query = "SELECT * FROM auth_token_audit WHERE 1=1";
+  const params: (string | number)[] = [];
+
+  if (tokenId) {
+    query += " AND token_id = ?";
+    params.push(tokenId);
+  }
+  if (clientId) {
+    query += " AND client_id = ?";
+    params.push(clientId);
+  }
+  if (action) {
+    query += " AND action = ?";
+    params.push(action);
+  }
+
+  query += " ORDER BY id DESC LIMIT ? OFFSET ?";
+  params.push(limit, offset);
+
+  const rows = database.prepare(query).all(...params) as Record<
+    string,
+    unknown
+  >[];
+  return rows.map(rowToAuditEntry);
+}
+
+export function cleanupAuditLog(maxAgeMs = 15_552_000_000): number {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const database = initDb();
+  const result = database
+    .prepare("DELETE FROM auth_token_audit WHERE created_at < ?")
+    .run(cutoff);
+  return result.changes;
+}
+export function updateProofCommitmentStatus(
+  commitmentHash: string,
+  status: "COMMITTED" | "REVEALED" | "EXPIRED",
+): void {
+  const database = initDb();
+  database
+    .prepare(
+      "UPDATE proof_commitments SET status = ? WHERE commitment_hash = ?",
+    )
+    .run(status, commitmentHash);
+}
+
+/**
+ * Store a vote receipt for confirmation and verification
+ */
+export function storeVoteReceipt(
+  nullifier: string,
+  txHash: string,
+  proposalId: number,
+  daoId: number,
+  status: "confirmed" | "pending" | "failed" = "confirmed",
+): void {
+  const database = getWriteDb();
+  try {
+    database
+      .prepare(
+        `INSERT INTO vote_receipts (nullifier, tx_hash, proposal_id, dao_id, status)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(nullifier, txHash, proposalId, daoId, status);
+    incrementTransactionCounter();
+  } catch (err) {
+    // Ignore duplicate key errors (idempotent)
+    if (!(err instanceof Error && err.message.includes("UNIQUE"))) {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Retrieve a vote receipt by nullifier
+ */
+export function getVoteReceipt(
+  nullifier: string,
+): Record<string, unknown> | null {
+  const database = getReadDb();
+  const row = database
+    .prepare("SELECT * FROM vote_receipts WHERE nullifier = ?")
+    .get(nullifier);
+  return row ? (row as Record<string, unknown>) : null;
+}
+
+/**
+ * Retrieve vote receipts for a specific DAO
+ */
+export function getVoteReceiptsByDao(
+  daoId: number,
+  limit: number = 100,
+  offset: number = 0,
+): Record<string, unknown>[] {
+  const database = getReadDb();
+  const rows = database
+    .prepare(
+      `SELECT * FROM vote_receipts
+       WHERE dao_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(daoId, limit, offset);
+  return rows ? (rows as Record<string, unknown>[]) : [];
 }

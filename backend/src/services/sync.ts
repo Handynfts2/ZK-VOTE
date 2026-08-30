@@ -1,6 +1,6 @@
 /**
  * Sync Service with Optimistic Concurrency Control (Copy-on-Write Cache Snapshots)
- * 
+ *
  * Handles DAO and membership synchronization from contracts to local cache.
  * Implements immutable cache snapshots with atomic reference swapping to eliminate
  * race conditions during async interleaving, cache versioning, invalidation notifications,
@@ -19,6 +19,7 @@ import {
   relayerKeypair,
   callWithTimeout,
   simulateWithBackoff,
+  sequenceManager,
 } from "./stellar.js";
 import type { Dao } from "../types/index.js";
 import {
@@ -28,6 +29,7 @@ import {
   daosSynced,
   membershipSyncsTotal,
 } from "./metrics.js";
+import { markDegraded, markHealthy } from "./service-health.js";
 import { sharedSingleFlight } from "../utils/singleflight.js";
 
 // ============================================
@@ -122,7 +124,9 @@ export function getCacheMetrics(): CacheMetrics {
 /**
  * Register listener for cache invalidation notifications
  */
-export function onCacheInvalidated(listener: (snapshot: CacheSnapshot) => void): () => void {
+export function onCacheInvalidated(
+  listener: (snapshot: CacheSnapshot) => void,
+): () => void {
   cacheEmitter.on("cache:invalidated", listener);
   return () => {
     cacheEmitter.off("cache:invalidated", listener);
@@ -136,7 +140,10 @@ export function onCacheInvalidated(listener: (snapshot: CacheSnapshot) => void):
  * access-order LRU because these maps are immutable copy-on-write
  * snapshots, and reordering on read would defeat that concurrency design.
  */
-export function evictOldestOverflow<K, V>(map: Map<K, V>, maxEntries: number): Map<K, V> {
+export function evictOldestOverflow<K, V>(
+  map: Map<K, V>,
+  maxEntries: number,
+): Map<K, V> {
   if (map.size <= maxEntries) return map;
   const trimmed = new Map(map);
   while (trimmed.size > maxEntries) {
@@ -152,7 +159,7 @@ export function evictOldestOverflow<K, V>(map: Map<K, V>, maxEntries: number): M
  */
 function swapCacheSnapshot(
   newMembers: Map<number, Set<string>>,
-  newAdmins: Map<number, string>
+  newAdmins: Map<number, string>,
 ): CacheSnapshot {
   const nextVersion = currentSnapshot.version + 1;
   const boundedMembers = evictOldestOverflow(newMembers, config.maxCachedDaos);
@@ -327,7 +334,9 @@ export async function syncDaosFromContract(): Promise<number> {
             StellarSdk.rpc.Api.isSimulationSuccess(getSimResult) &&
             getSimResult.result?.retval
           ) {
-            const daoData = StellarSdk.scValToNative(getSimResult.result.retval);
+            const daoData = StellarSdk.scValToNative(
+              getSimResult.result.retval,
+            );
             daos.push({
               id: i,
               name: daoData.name || `DAO ${i}`,
@@ -364,7 +373,10 @@ export async function syncDaosFromContract(): Promise<number> {
       dbService.setDaosSyncTime(new Date().toISOString());
       daosSynced.inc(daos.length);
       serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
-      log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
+      log("info", "dao_sync_complete", {
+        synced: daos.length,
+        total: daoCount,
+      });
 
       return daos.length;
     } catch (err) {
@@ -390,19 +402,24 @@ export function startDaoSync(): void {
   syncDaosFromContract()
     .then((count) => {
       log("info", "initial_dao_sync", { count });
+      markHealthy("dao_sync");
     })
     .catch((err) => {
+      markDegraded("dao_sync", (err as Error).message);
       log("error", "initial_dao_sync_failed", {
         error: (err as Error).message,
       });
     });
 
   daoSyncInterval = setInterval(() => {
-    syncDaosFromContract().catch((err) => {
-      log("error", "periodic_dao_sync_failed", {
-        error: (err as Error).message,
+    syncDaosFromContract()
+      .then(() => markHealthy("dao_sync"))
+      .catch((err) => {
+        markDegraded("dao_sync", (err as Error).message);
+        log("error", "periodic_dao_sync_failed", {
+          error: (err as Error).message,
+        });
       });
-    });
   }, config.daoSyncIntervalMs);
 
   log("info", "dao_sync_started", { intervalMs: config.daoSyncIntervalMs });
@@ -592,6 +609,25 @@ export function stopMembershipSync(): void {
 }
 
 /**
+ * Graceful shutdown: flush sequence state so the next process starts clean.
+ * Called by the shutdown handler after in-flight submissions have drained.
+ */
+export async function gracefulShutdownSync(): Promise<void> {
+  stopDaoSync();
+  stopMembershipSync();
+  try {
+    await sequenceManager.forceResync(
+      server as import("@stellar/stellar-sdk").rpc.Server,
+    );
+    log("info", "sequence_persisted_on_shutdown");
+  } catch (err) {
+    log("warn", "sequence_resync_on_shutdown_failed", {
+      error: (err as Error).message,
+    });
+  }
+}
+
+/**
  * Trigger membership sync for specific DAO
  */
 export async function triggerDaoMembershipSync(daoId: number): Promise<void> {
@@ -617,7 +653,10 @@ interface MembershipVerificationEntry {
   expiresAt: number;
 }
 
-const membershipVerificationCache = new Map<string, MembershipVerificationEntry>();
+const membershipVerificationCache = new Map<
+  string,
+  MembershipVerificationEntry
+>();
 
 interface MembershipVerificationMetrics {
   checks: number;
@@ -651,8 +690,15 @@ export function getMembershipVerificationMetrics(): {
   avgLatencyMs: number;
   maxLatencyMs: number;
 } {
-  const { checks, chainCalls, cacheHits, mismatches, errors, totalLatencyMs, maxLatencyMs } =
-    membershipVerificationMetrics;
+  const {
+    checks,
+    chainCalls,
+    cacheHits,
+    mismatches,
+    errors,
+    totalLatencyMs,
+    maxLatencyMs,
+  } = membershipVerificationMetrics;
   return {
     checks,
     chainCalls,
@@ -660,7 +706,9 @@ export function getMembershipVerificationMetrics(): {
     mismatches,
     errors,
     avgLatencyMs:
-      chainCalls > 0 ? Math.round((totalLatencyMs / chainCalls) * 100) / 100 : 0,
+      chainCalls > 0
+        ? Math.round((totalLatencyMs / chainCalls) * 100) / 100
+        : 0,
     maxLatencyMs,
   };
 }
@@ -741,9 +789,7 @@ export async function verifyMembership(
       throw new Error("Membership verification simulation failed");
     }
 
-    const isMember = Boolean(
-      StellarSdk.scValToNative(simResult.result.retval),
-    );
+    const isMember = Boolean(StellarSdk.scValToNative(simResult.result.retval));
     const latencyMs = Date.now() - start;
     membershipVerificationMetrics.chainCalls++;
     membershipVerificationMetrics.totalLatencyMs += latencyMs;
@@ -768,7 +814,11 @@ export async function verifyMembership(
       expiresAt: Date.now() + MEMBERSHIP_VERIFICATION_TTL_MS,
     });
 
-    log("debug", "membership_verified_realtime", { daoId, isMember, latencyMs });
+    log("debug", "membership_verified_realtime", {
+      daoId,
+      isMember,
+      latencyMs,
+    });
     return isMember;
   } catch (err) {
     membershipVerificationMetrics.errors++;

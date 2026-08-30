@@ -5,7 +5,7 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
-import type { ZodSchema, ZodError } from "zod";
+import type { ZodError, ZodType } from "zod";
 import { config } from "../config.js";
 import { log } from "../services/logger.js";
 
@@ -22,7 +22,7 @@ function formatZodError(error: ZodError): { field: string; message: string }[] {
 /**
  * Create validation middleware for request body
  */
-export function validateBody<T>(schema: ZodSchema<T>) {
+export function validateBody<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     // Handle stripped request bodies in test mode
     if (config.stripRequestBodies) {
@@ -53,7 +53,7 @@ export function validateBody<T>(schema: ZodSchema<T>) {
 /**
  * Create validation middleware for query parameters
  */
-export function validateQuery<T>(schema: ZodSchema<T>) {
+export function validateQuery<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.query);
 
@@ -80,7 +80,7 @@ export function validateQuery<T>(schema: ZodSchema<T>) {
 /**
  * Create validation middleware for URL parameters
  */
-export function validateParams<T>(schema: ZodSchema<T>) {
+export function validateParams<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.params);
 

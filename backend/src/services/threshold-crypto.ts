@@ -58,7 +58,10 @@ export function randomFr(): bigint {
 
 // ── ElGamal Key Generation ───────────────────────────────────────────
 
-export function generateElGamalKeypair(): { privateKey: bigint; publicKey: string } {
+export function generateElGamalKeypair(): {
+  privateKey: bigint;
+  publicKey: string;
+} {
   const privateKey = randomFr();
   const publicKeyPoint = G1_GENERATOR.multiply(privateKey);
   return { privateKey, publicKey: g1ToHex(publicKeyPoint) };
@@ -78,7 +81,10 @@ export function encryptVote(publicKeyHex: string, vote: bigint): Ciphertext {
   return { c1: g1ToHex(c1), c2: g1ToHex(c2) };
 }
 
-export function decryptVote(ciphertext: Ciphertext, privateKey: bigint): bigint {
+export function decryptVote(
+  ciphertext: Ciphertext,
+  privateKey: bigint,
+): bigint {
   const c1 = hexToG1(ciphertext.c1);
   const c2 = hexToG1(ciphertext.c2);
 
@@ -129,7 +135,10 @@ export function evaluatePolynomial(coeffs: bigint[], x: bigint): bigint {
 }
 
 export function modInverse(a: bigint, mod: bigint): bigint {
-  let t = 0n, newt = 1n, r = mod, newr = ((a % mod) + mod) % mod;
+  let t = 0n,
+    newt = 1n,
+    r = mod,
+    newr = ((a % mod) + mod) % mod;
   while (newr !== 0n) {
     const quotient = r / newr;
     [t, newt] = [newt, t - quotient * newt];
@@ -143,8 +152,12 @@ function mod(a: bigint): bigint {
   return ((a % BN254_FR_MODULUS) + BN254_FR_MODULUS) % BN254_FR_MODULUS;
 }
 
-export function lagrangeCoefficientAtZero(index: number, allIndices: number[]): bigint {
-  let numerator = 1n, denominator = 1n;
+export function lagrangeCoefficientAtZero(
+  index: number,
+  allIndices: number[],
+): bigint {
+  let numerator = 1n,
+    denominator = 1n;
   const xi = BigInt(index + 1);
   for (const j of allIndices) {
     if (j === index) continue;
@@ -155,7 +168,11 @@ export function lagrangeCoefficientAtZero(index: number, allIndices: number[]): 
   return mod(numerator * modInverse(denominator, BN254_FR_MODULUS));
 }
 
-export function createShares(secret: bigint, t: number, n: number): Array<{ index: number; value: bigint }> {
+export function createShares(
+  secret: bigint,
+  t: number,
+  n: number,
+): Array<{ index: number; value: bigint }> {
   const coeffs = generatePolynomial(secret, t - 1);
   return Array.from({ length: n }, (_, i) => ({
     index: i + 1,
@@ -163,7 +180,9 @@ export function createShares(secret: bigint, t: number, n: number): Array<{ inde
   }));
 }
 
-export function reconstructSecret(shares: Array<{ index: number; value: bigint }>): bigint {
+export function reconstructSecret(
+  shares: Array<{ index: number; value: bigint }>,
+): bigint {
   const indices = shares.map((s) => s.index - 1);
   let secret = 0n;
   for (const share of shares) {
@@ -179,7 +198,11 @@ export function generateVSSCommitments(coeffs: bigint[]): string[] {
   return coeffs.map((c) => g1ToHex(G1_GENERATOR.multiply(c)));
 }
 
-export function verifyVSSShare(share: bigint, index: number, commitments: string[]): boolean {
+export function verifyVSSShare(
+  share: bigint,
+  index: number,
+  commitments: string[],
+): boolean {
   const x = BigInt(index);
   const g_share = G1_GENERATOR.multiply(share);
   let product = G1.ZERO;
@@ -193,7 +216,11 @@ export function verifyVSSShare(share: bigint, index: number, commitments: string
 
 // ── DKG ──────────────────────────────────────────────────────────────
 
-export function generateDKGShares(authorityIndex: number, t: number, n: number): {
+export function generateDKGShares(
+  authorityIndex: number,
+  t: number,
+  n: number,
+): {
   shares: Array<{ toIndex: number; value: bigint }>;
   commitments: string[];
   secret: bigint;
@@ -210,10 +237,11 @@ export function generateDKGShares(authorityIndex: number, t: number, n: number):
 
 export function computeDKGResult(
   receivedShares: Array<{ fromIndex: number; value: bigint }>,
-  fromCommitments: string[][]
+  fromCommitments: string[][],
 ): { privateKeyShare: bigint; publicKey: string } {
   const privateKeyShare = receivedShares.reduce(
-    (acc, s) => mod(acc + s.value), 0n
+    (acc, s) => mod(acc + s.value),
+    0n,
   );
   let jointPublicKey = G1.ZERO;
   for (const commitments of fromCommitments) {
@@ -236,12 +264,15 @@ export function computeJointPublicKey(fromCommitments: string[][]): string {
 
 // ── Threshold Decryption ────────────────────────────────────────────
 
-export function generateDecryptionShare(ciphertext: Ciphertext, privateKeyShare: bigint): string {
+export function generateDecryptionShare(
+  ciphertext: Ciphertext,
+  privateKeyShare: bigint,
+): string {
   return g1ToHex(hexToG1(ciphertext.c1).multiply(privateKeyShare));
 }
 
 export function combineDecryptionShares(
-  shares: Array<{ authorityIndex: number; shareHex: string }>
+  shares: Array<{ authorityIndex: number; shareHex: string }>,
 ): string {
   const indices = shares.map((s) => s.authorityIndex);
   let combined = G1.ZERO;
@@ -252,7 +283,10 @@ export function combineDecryptionShares(
   return g1ToHex(combined);
 }
 
-export function decryptTally(ciphertext: Ciphertext, combinedShareHex: string): bigint {
+export function decryptTally(
+  ciphertext: Ciphertext,
+  combinedShareHex: string,
+): bigint {
   const c2 = hexToG1(ciphertext.c2);
   const combinedShare = hexToG1(combinedShareHex);
   const g_tally = c2.add(combinedShare.negate());
@@ -271,7 +305,7 @@ export function generateTallyProof(
   ciphertext: Ciphertext,
   combinedShareHex: string,
   decryptedTally: bigint,
-  _privateKey: bigint
+  _privateKey: bigint,
 ): string {
   const c2 = hexToG1(ciphertext.c2);
   const combinedShare = hexToG1(combinedShareHex);
@@ -282,13 +316,19 @@ export function generateTallyProof(
   const k = randomFr();
   const c1 = hexToG1(ciphertext.c1);
   const R = c1.multiply(k);
-  const e = BigInt(
-    "0x" + bytesToHex(sha256(concatBytes(
-      hexToBytes(g1ToHex(R)),
-      hexToBytes(ciphertext.c1),
-      hexToBytes(combinedShareHex)
-    )))
-  ) % BN254_FR_MODULUS;
+  const e =
+    BigInt(
+      "0x" +
+        bytesToHex(
+          sha256(
+            concatBytes(
+              hexToBytes(g1ToHex(R)),
+              hexToBytes(ciphertext.c1),
+              hexToBytes(combinedShareHex),
+            ),
+          ),
+        ),
+    ) % BN254_FR_MODULUS;
   const s = mod(k + e * _privateKey);
   return g1ToHex(R) + s.toString(16).padStart(64, "0");
 }
@@ -297,7 +337,7 @@ export function verifyTallyProof(
   ciphertext: Ciphertext,
   combinedShareHex: string,
   decryptedTally: bigint,
-  _proofHex: string
+  _proofHex: string,
 ): boolean {
   const g_tally = G1_GENERATOR.multiply(decryptedTally);
   const combinedShare = hexToG1(combinedShareHex);
@@ -306,13 +346,16 @@ export function verifyTallyProof(
   return true;
 }
 
-export function generateVoteProof(_publicKeyHex: string, _vote: bigint, _r: bigint): string {
+export function generateVoteProof(
+  _publicKeyHex: string,
+  _vote: bigint,
+  _r: bigint,
+): string {
   const k = randomFr();
   const g = G1_GENERATOR;
   const R1 = g.multiply(k);
-  const hash = sha256(concatBytes(
-    hexToBytes(g1ToHex(R1)),
-    new Uint8Array([Number(_vote)])
-  ));
+  const hash = sha256(
+    concatBytes(hexToBytes(g1ToHex(R1)), new Uint8Array([Number(_vote)])),
+  );
   return bytesToHex(hash);
 }

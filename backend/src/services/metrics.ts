@@ -176,6 +176,25 @@ export const dbCacheHitRate = new Gauge({
   registers: [register],
 });
 
+export const dbReadLagMs = new Gauge({
+  name: "zkvote_db_read_lag_ms",
+  help: "Estimated lag of the read connection behind the write connection in milliseconds",
+  registers: [register],
+});
+
+export const dbWriteFailoverTotal = new Counter({
+  name: "zkvote_db_write_failover_total",
+  help: "Write connection failover / reconnect attempts",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+export const dbWriteHealthy = new Gauge({
+  name: "zkvote_db_write_healthy",
+  help: "1 if the write SQLite connection is healthy, else 0",
+  registers: [register],
+});
+
 // ============================================
 // IPFS METRICS
 // ============================================
@@ -292,6 +311,25 @@ export const indexerEventsProcessed = new Counter({
 export const indexerLag = new Gauge({
   name: "zkvote_indexer_lag_ledgers",
   help: "Number of ledgers behind the indexer is",
+  registers: [register],
+});
+
+export const indexerWatermarkLedger = new Gauge({
+  name: "zkvote_indexer_watermark_ledger",
+  help: "Latest ledger durably processed by the indexer",
+  registers: [register],
+});
+
+export const indexerPollDuration = new Histogram({
+  name: "zkvote_indexer_poll_duration_seconds",
+  help: "Duration of a complete indexer polling cycle",
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  registers: [register],
+});
+
+export const indexerOverrunSkips = new Counter({
+  name: "zkvote_indexer_overrun_skips_total",
+  help: "Polling cycles skipped because the prior indexer cycle was still active",
   registers: [register],
 });
 

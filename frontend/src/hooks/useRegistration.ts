@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   generateDeterministicZKCredentials,
   getZKCredentials,
@@ -63,7 +63,7 @@ export function useRegistration({
     }
 
     try {
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       const leafIndexResult = await clients.membershipTree.get_leaf_index({
         dao_id: BigInt(daoId),
@@ -107,7 +107,10 @@ export function useRegistration({
         throw new Error("Wallet kit not available");
       }
 
-      let secret: string, salt: string, commitment: string;
+      let secret: string,
+        salt: string,
+        blindingFactor: string,
+        commitment: string;
 
       const cached = publicKey ? getZKCredentials(daoId, publicKey) : null;
 
@@ -118,6 +121,7 @@ export function useRegistration({
           );
         secret = cached.secret;
         salt = cached.salt;
+        blindingFactor = cached.blindingFactor;
         commitment = cached.commitment;
         setRegistrationStatus("Using existing credentials...");
       } else {
@@ -136,6 +140,7 @@ export function useRegistration({
 
         secret = credentials.secret;
         salt = credentials.salt;
+        blindingFactor = credentials.blindingFactor;
         commitment = credentials.commitment;
 
         if (import.meta.env.DEV)
@@ -150,7 +155,7 @@ export function useRegistration({
         console.log(
           "[Registration] Step 2: Registering commitment in Merkle tree...",
         );
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       const tx = await clients.membershipTree.register_with_caller({
         dao_id: BigInt(daoId),
@@ -212,7 +217,7 @@ export function useRegistration({
       storeZKCredentials(
         daoId,
         publicKey || "",
-        { secret, salt, commitment },
+        { secret, salt, blindingFactor, commitment },
         leafIndex,
       );
 

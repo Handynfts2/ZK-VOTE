@@ -74,7 +74,10 @@ export const userStore = {
       if (typeof window !== "undefined") {
         const item = localStorage.getItem(STORAGE_KEY);
         if (item) {
-          const restored = decryptData<{ address: string; daoMemberships: string[] }>(item);
+          const restored = decryptData<{
+            address: string;
+            daoMemberships: string[];
+          }>(item);
           if (restored?.address) {
             state = {
               address: restored.address,
@@ -95,5 +98,6 @@ export const userStore = {
     return () => listeners.delete(listener);
   },
 
-  getSanitizedState: () => sanitizeState(state as unknown as Record<string, unknown>),
+  getSanitizedState: () =>
+    sanitizeState(state as unknown as Record<string, unknown>),
 };

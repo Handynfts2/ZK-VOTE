@@ -68,7 +68,7 @@ class ProtocolState {
     daoId: number,
     proposalId: number,
     thresholdN: number,
-    thresholdT: number
+    thresholdT: number,
   ): DkgRound {
     const key = this.getRoundKey(daoId, proposalId);
     if (!this.rounds.has(key)) {
@@ -91,13 +91,17 @@ class ProtocolState {
   addAuthority(
     daoId: number,
     proposalId: number,
-    authority: AuthorityInfo
+    authority: AuthorityInfo,
   ): void {
     const round = this.getOrCreateRound(daoId, proposalId, 0, 0);
     round.authorities.push(authority);
   }
 
-  addEncryptedVote(daoId: number, proposalId: number, vote: EncryptedVote): void {
+  addEncryptedVote(
+    daoId: number,
+    proposalId: number,
+    vote: EncryptedVote,
+  ): void {
     const key = this.getRoundKey(daoId, proposalId);
     if (!this.encryptedVotes.has(key)) {
       this.encryptedVotes.set(key, []);
@@ -113,7 +117,7 @@ class ProtocolState {
     daoId: number,
     proposalId: number,
     authorityIndex: number,
-    shareHex: string
+    shareHex: string,
   ): void {
     const key = this.getRoundKey(daoId, proposalId);
     if (!this.decryptionShares.has(key)) {
@@ -124,7 +128,7 @@ class ProtocolState {
 
   getDecryptionShares(
     daoId: number,
-    proposalId: number
+    proposalId: number,
   ): Array<{ authorityIndex: number; shareHex: string }> {
     const map = this.decryptionShares.get(this.getRoundKey(daoId, proposalId));
     if (!map) return [];
@@ -166,11 +170,21 @@ export async function initializeDKG(
   proposalId: number,
   thresholdN: number,
   thresholdT: number,
-  creatorAddress: string
+  creatorAddress: string,
 ): Promise<DkgRound> {
-  log("info", "dkg_initializing", { daoId, proposalId, thresholdN, thresholdT });
+  log("info", "dkg_initializing", {
+    daoId,
+    proposalId,
+    thresholdN,
+    thresholdT,
+  });
 
-  const round = state.getOrCreateRound(daoId, proposalId, thresholdN, thresholdT);
+  const round = state.getOrCreateRound(
+    daoId,
+    proposalId,
+    thresholdN,
+    thresholdT,
+  );
 
   emitEvent({
     type: "authority_registered",
@@ -189,7 +203,7 @@ export async function registerAuthority(
   proposalId: number,
   authorityAddress: string,
   authorityName: string,
-  verifierId: string
+  verifierId: string,
 ): Promise<{
   shares: Array<{ toIndex: number; value: bigint }>;
   commitments: string[];
@@ -201,7 +215,7 @@ export async function registerAuthority(
   const { shares, commitments } = tc.generateDKGShares(
     authorityIndex,
     round.thresholdT,
-    round.thresholdN
+    round.thresholdN,
   );
 
   // Generate keypair from the authority's secret
@@ -232,7 +246,7 @@ export async function registerAuthority(
  */
 export async function finalizeDKG(
   daoId: number,
-  proposalId: number
+  proposalId: number,
 ): Promise<{ jointPublicKey: string; authorities: AuthorityInfo[] }> {
   const round = state.getRound(daoId, proposalId);
   if (!round) throw new Error("DKG round not found");
@@ -263,7 +277,7 @@ export async function encryptAndSubmitVote(
   daoId: number,
   proposalId: number,
   voteChoice: number,
-  voterNullifier: string
+  voterNullifier: string,
 ): Promise<tc.Ciphertext> {
   const round = state.getRound(daoId, proposalId);
   if (!round || !round.jointPublicKey) {
@@ -293,7 +307,7 @@ export async function encryptAndSubmitVote(
  */
 export async function computeEncryptedTally(
   daoId: number,
-  proposalId: number
+  proposalId: number,
 ): Promise<tc.Ciphertext> {
   const votes = state.getEncryptedVotes(daoId, proposalId);
   if (votes.length === 0) {
@@ -314,14 +328,16 @@ export async function generateAuthorityDecryptionShare(
   proposalId: number,
   authorityAddress: string,
   privateKeyShare: bigint,
-  encryptedTally: tc.Ciphertext
+  encryptedTally: tc.Ciphertext,
 ): Promise<string> {
   const shareHex = tc.generateDecryptionShare(encryptedTally, privateKeyShare);
 
   const round = state.getRound(daoId, proposalId);
   if (!round) throw new Error("Round not found");
 
-  const authority = round.authorities.find((a) => a.address === authorityAddress);
+  const authority = round.authorities.find(
+    (a) => a.address === authorityAddress,
+  );
   if (!authority) throw new Error("Authority not found");
 
   state.addDecryptionShare(daoId, proposalId, authority.index, shareHex);
@@ -340,7 +356,7 @@ export async function generateAuthorityDecryptionShare(
 export async function computeFinalTally(
   daoId: number,
   proposalId: number,
-  encryptedTally: tc.Ciphertext
+  encryptedTally: tc.Ciphertext,
 ): Promise<{ tally: bigint; proof: string; combinedShare: string }> {
   const shares = state.getDecryptionShares(daoId, proposalId);
   const round = state.getRound(daoId, proposalId);
@@ -348,7 +364,7 @@ export async function computeFinalTally(
 
   if (shares.length < round.thresholdT) {
     throw new Error(
-      `Insufficient decryption shares: have ${shares.length}, need ${round.thresholdT}`
+      `Insufficient decryption shares: have ${shares.length}, need ${round.thresholdT}`,
     );
   }
 
@@ -363,10 +379,14 @@ export async function computeFinalTally(
     encryptedTally,
     combinedShare,
     tally,
-    0n // In threshold setting, full private key is reconstructed from shares
+    0n, // In threshold setting, full private key is reconstructed from shares
   );
 
-  log("info", "tally_decrypted", { daoId, proposalId, tally: tally.toString() });
+  log("info", "tally_decrypted", {
+    daoId,
+    proposalId,
+    tally: tally.toString(),
+  });
 
   emitEvent({ type: "tally_decrypted", tally: tally.toString() });
 
@@ -375,7 +395,10 @@ export async function computeFinalTally(
 
 // ── State Queries ─────────────────────────────────────────────────────
 
-export function getProtocolState(daoId: number, proposalId: number): {
+export function getProtocolState(
+  daoId: number,
+  proposalId: number,
+): {
   dkgRound: DkgRound | undefined;
   encryptedVoteCount: number;
   decryptionShareCount: number;

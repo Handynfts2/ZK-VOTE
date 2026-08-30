@@ -12,7 +12,7 @@
 import { Router, type Request, type Response } from "express";
 
 import { log } from "../services/logger.js";
-import { authGuard, auditLog } from "../middleware/index.js";
+import { authGuard, auditLog, bodyLimit } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 import * as coordinator from "../services/threshold-coordinator.js";
 
@@ -23,6 +23,7 @@ const router = Router();
  */
 router.post(
   "/threshold/init",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_init"),
   (async (req: Request, res: Response) => {
@@ -34,7 +35,7 @@ router.post(
         Number(proposalId),
         Number(thresholdN),
         Number(thresholdT),
-        req.body.creator || ""
+        req.body.creator || "",
       );
 
       res.json({
@@ -57,10 +58,12 @@ router.post(
  */
 router.post(
   "/threshold/authority/register",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_authority_register"),
   (async (req: Request, res: Response) => {
-    const { daoId, proposalId, authorityAddress, authorityName, verifierId } = req.body;
+    const { daoId, proposalId, authorityAddress, authorityName, verifierId } =
+      req.body;
 
     try {
       const result = await coordinator.registerAuthority(
@@ -68,7 +71,7 @@ router.post(
         Number(proposalId),
         authorityAddress,
         authorityName,
-        verifierId
+        verifierId,
       );
 
       res.json({
@@ -94,13 +97,17 @@ router.post(
  */
 router.post(
   "/threshold/dkg/finalize",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_dkg_finalize"),
   (async (req: Request, res: Response) => {
     const { daoId, proposalId } = req.body;
 
     try {
-      const result = await coordinator.finalizeDKG(Number(daoId), Number(proposalId));
+      const result = await coordinator.finalizeDKG(
+        Number(daoId),
+        Number(proposalId),
+      );
 
       res.json({
         success: true,
@@ -123,6 +130,7 @@ router.post(
  */
 router.post(
   "/threshold/vote/encrypt",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_vote_encrypt"),
   (async (req: Request, res: Response) => {
@@ -133,7 +141,7 @@ router.post(
         Number(daoId),
         Number(proposalId),
         Number(voteChoice),
-        voterNullifier
+        voterNullifier,
       );
 
       res.json({
@@ -156,6 +164,7 @@ router.post(
  */
 router.post(
   "/threshold/tally/compute",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_tally_compute"),
   (async (req: Request, res: Response) => {
@@ -164,7 +173,7 @@ router.post(
     try {
       const encryptedTally = await coordinator.computeEncryptedTally(
         Number(daoId),
-        Number(proposalId)
+        Number(proposalId),
       );
 
       res.json({
@@ -187,10 +196,17 @@ router.post(
  */
 router.post(
   "/threshold/decrypt/share",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_decrypt_share"),
   (async (req: Request, res: Response) => {
-    const { daoId, proposalId, authorityAddress, privateKeyShare, encryptedTally } = req.body;
+    const {
+      daoId,
+      proposalId,
+      authorityAddress,
+      privateKeyShare,
+      encryptedTally,
+    } = req.body;
 
     try {
       const shareHex = await coordinator.generateAuthorityDecryptionShare(
@@ -198,7 +214,7 @@ router.post(
         Number(proposalId),
         authorityAddress,
         BigInt(privateKeyShare),
-        encryptedTally
+        encryptedTally,
       );
 
       res.json({
@@ -222,6 +238,7 @@ router.post(
  */
 router.post(
   "/threshold/tally/decrypt",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_tally_decrypt"),
   (async (req: Request, res: Response) => {
@@ -231,7 +248,7 @@ router.post(
       const result = await coordinator.computeFinalTally(
         Number(daoId),
         Number(proposalId),
-        encryptedTally
+        encryptedTally,
       );
 
       res.json({
@@ -254,41 +271,41 @@ router.post(
 /**
  * GET /threshold/state/:daoId/:proposalId - Get protocol state
  */
-router.get(
-  "/threshold/state/:daoId/:proposalId",
-  (async (req: Request, res: Response) => {
-    const { daoId, proposalId } = req.params;
+router.get("/threshold/state/:daoId/:proposalId", (async (
+  req: Request,
+  res: Response,
+) => {
+  const { daoId, proposalId } = req.params;
 
-    try {
-      const state = coordinator.getProtocolState(Number(daoId), Number(proposalId));
+  try {
+    const state = coordinator.getProtocolState(
+      Number(daoId),
+      Number(proposalId),
+    );
 
-      res.json({
-        success: true,
-        state,
-      });
-    } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
-    }
-  }) as AsyncHandler,
-);
+    res.json({
+      success: true,
+      state,
+    });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+}) as AsyncHandler);
 
 /**
  * GET /threshold/status - Get overall threshold system status
  */
-router.get(
-  "/threshold/status",
-  (async (_req: Request, res: Response) => {
-    res.json({
-      success: true,
-      status: "operational",
-      version: "1.0.0",
-      curves: ["BN254"],
-      supportedThresholds: {
-        minN: 2,
-        maxN: 32,
-      },
-    });
-  }) as AsyncHandler,
-);
+router.get("/threshold/status", (async (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    status: "operational",
+    version: "1.0.0",
+    curves: ["BN254"],
+    supportedThresholds: {
+      minN: 2,
+      maxN: 32,
+    },
+  });
+}) as AsyncHandler);
 
 export default router;

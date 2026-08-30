@@ -4,7 +4,29 @@ include "node_modules/circomlib/circuits/poseidon.circom";
 
 // Merkle tree inclusion proof using Poseidon hash
 // Compatible with Stellar P25 on-chain Poseidon (BN254)
+//
+// DOMAIN SEPARATION (#167): every leaf is hashed with a fixed tag constant
+// before entering the tree — leafHash = Poseidon(LEAF_DOMAIN, leaf) — while
+// internal nodes keep the original Poseidon(left, right). Both still use the
+// same 2-input Poseidon (matching the on-chain contract's `hash_pair`,
+// which only has cryptographic parameters for the 2-input width; minting a
+// new, wider Poseidon parameter set is a real ceremony, not something to
+// improvise here).
+//
+// Before this fix, `leaf` was used directly, unhashed, as the tree's
+// depth-`levels` value. An attacker who finds two commitments C1, C2 such
+// that Poseidon(C1, C2) == C_target could register C1 and C2 as two
+// separate members, then present C_target as a fake *leaf* at depth
+// levels-1 — since the leaf slot accepted a raw, unhashed value, an
+// internal-node hash and a leaf value lived in the same, indistinguishable
+// space. Requiring every leaf to first pass through Poseidon(LEAF_DOMAIN,
+// leaf) closes this: a forged leaf now requires finding some raw value L
+// with Poseidon(LEAF_DOMAIN, L) equal to an internal-node hash the attacker
+// can compute from two real members — a second-preimage against Poseidon
+// itself, which is exactly the hardness Poseidon is designed to provide.
 template MerkleTreeInclusionProof(levels) {
+    var LEAF_DOMAIN = 1;
+
     // Private inputs
     signal input leaf;
     signal input pathElements[levels];
@@ -16,9 +38,14 @@ template MerkleTreeInclusionProof(levels) {
     // Intermediate hashes
     component hashers[levels];
     component selectors[levels];
+    component leafHasher = Poseidon(2);
 
     signal currentHash[levels + 1];
-    currentHash[0] <== leaf;
+
+    // Domain-separate the leaf before entering the tree.
+    leafHasher.inputs[0] <== LEAF_DOMAIN;
+    leafHasher.inputs[1] <== leaf;
+    currentHash[0] <== leafHasher.out;
 
     for (var i = 0; i < levels; i++) {
         // CRITICAL CONSTRAINT: Ensure pathIndices is binary (0 or 1)

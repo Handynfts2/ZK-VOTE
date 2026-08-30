@@ -155,15 +155,15 @@ export function BridgePanel({
       {!evmConnected ? (
         <button
           onClick={connectEVMWallet}
-          className="w-full px-4 py-3 min-h-[48px] bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-lg transition-colors flex items-center justify-center"
+          className="w-full px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors"
         >
           Connect MetaMask
         </button>
       ) : (
-        <div className="flex items-center gap-2 text-sm p-2 bg-muted/40 rounded-md">
-          <span className="w-2.5 h-2.5 bg-green-500 rounded-full shrink-0" />
-          <span className="font-mono text-xs break-all">
-            {evmAddress}
+        <div className="flex items-center gap-2 text-sm">
+          <span className="w-2 h-2 bg-green-500 rounded-full" />
+          <span className="font-mono text-xs">
+            {evmAddress?.slice(0, 6)}...{evmAddress?.slice(-4)}
           </span>
         </div>
       )}
@@ -172,10 +172,10 @@ export function BridgePanel({
       {evmConnected && (
         <div className="space-y-2">
           <label className="text-sm font-medium">Vote Choice</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="flex gap-2">
             <button
               onClick={() => setVoteChoice(true)}
-              className={`w-full px-4 py-3 min-h-[48px] rounded-lg border font-medium transition-colors ${
+              className={`flex-1 px-4 py-2 rounded-lg border transition-colors ${
                 voteChoice === true
                   ? "bg-green-500 text-white border-green-500"
                   : "bg-background hover:bg-green-50 dark:hover:bg-green-950 border-border"
@@ -185,7 +185,7 @@ export function BridgePanel({
             </button>
             <button
               onClick={() => setVoteChoice(false)}
-              className={`w-full px-4 py-3 min-h-[48px] rounded-lg border font-medium transition-colors ${
+              className={`flex-1 px-4 py-2 rounded-lg border transition-colors ${
                 voteChoice === false
                   ? "bg-red-500 text-white border-red-500"
                   : "bg-background hover:bg-red-50 dark:hover:bg-red-950 border-border"
@@ -202,7 +202,7 @@ export function BridgePanel({
         <button
           onClick={submitBridgeVote}
           disabled={voteState.status !== "idle"}
-          className="w-full px-4 py-3 min-h-[48px] bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white font-medium rounded-lg transition-colors flex items-center justify-center"
+          className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-lg transition-colors"
         >
           {voteState.status === "idle" && "Submit Cross-Chain Vote"}
           {voteState.status === "generating" && "Generating Proof..."}

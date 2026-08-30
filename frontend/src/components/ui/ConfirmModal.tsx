@@ -75,12 +75,19 @@ export function ConfirmModal({
 
         {/* Content */}
         <div className="p-4 overflow-y-auto flex-1">
-          <p className="text-sm text-muted-foreground break-words-all">{message}</p>
+          <p className="text-sm text-muted-foreground break-words-all">
+            {message}
+          </p>
         </div>
 
         {/* Footer */}
         <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-border bg-muted/30 shrink-0">
-          <Button variant="outline" onClick={onClose} disabled={isLoading} className="w-full sm:w-auto">
+          <Button
+            variant="outline"
+            onClick={onClose}
+            disabled={isLoading}
+            className="w-full sm:w-auto"
+          >
             {cancelText}
           </Button>
           <Button
@@ -148,19 +155,28 @@ export function AlertModal({
             <Icon className={`w-5 h-5 ${iconColor}`} />
             <h3 className="text-lg font-semibold">{title}</h3>
           </div>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-10 w-10 p-2 sm:h-8 sm:w-8">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-10 w-10 p-2 sm:h-8 sm:w-8"
+          >
             <X className="w-4 h-4" />
           </Button>
         </div>
 
         {/* Content */}
         <div className="p-4 overflow-y-auto flex-1">
-          <p className="text-sm text-muted-foreground break-words-all">{message}</p>
+          <p className="text-sm text-muted-foreground break-words-all">
+            {message}
+          </p>
         </div>
 
         {/* Footer */}
         <div className="flex justify-end p-4 border-t border-border bg-muted/30 shrink-0">
-          <Button onClick={onClose} className="w-full sm:w-auto">OK</Button>
+          <Button onClick={onClose} className="w-full sm:w-auto">
+            OK
+          </Button>
         </div>
       </div>
     </div>

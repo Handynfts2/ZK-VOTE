@@ -1,6 +1,18 @@
 [workspace]
 members = [
     "contracts/zkvote-groth16",
+    "contracts/zkvote-prover",
+    "contracts/dao-registry",
+    "contracts/membership-sbt",
+    "contracts/membership-tree",
+    "contracts/voting",
+    "contracts/comments",
+    "contracts/bridge/soroban",
+    "contracts/circuit-registry",
+    "tests/integration",
+]
+default-members = [
+    "contracts/zkvote-groth16",
     "contracts/dao-registry",
     "contracts/membership-sbt",
     "contracts/membership-tree",
@@ -10,8 +22,9 @@ members = [
     "contracts/bridge/soroban",
     "contracts/circuit-registry",
     "contracts/token",
+    "contracts/vdf",
     "contracts/threshold-crypto",
-    "tests/integration",
+    "contracts/rewards",
 ]
 resolver = "2"
 
@@ -33,3 +46,35 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+
+# Dev-profile overrides: the Rust prover (zkvote-prover) and the ark-* crypto
+# crates are the bottleneck for witness/proof generation. Compile them optimized
+# even in dev so `target/debug/zkprove` is fast enough to run the e2e suite
+# without a full (LTO) release build of wasmtime. wasmtime itself stays at the
+# default dev opt-level (already compiled) and is NOT rebuilt.
+[profile.dev.package.ark-bls12-381]
+opt-level = 3
+[profile.dev.package.ark-bn254]
+opt-level = 3
+[profile.dev.package.ark-ec]
+opt-level = 3
+[profile.dev.package.ark-ff]
+opt-level = 3
+[profile.dev.package.ark-ff-asm]
+opt-level = 3
+[profile.dev.package.ark-ff-macros]
+opt-level = 3
+[profile.dev.package.ark-poly]
+opt-level = 3
+[profile.dev.package.ark-serialize]
+opt-level = 3
+[profile.dev.package.ark-serialize-derive]
+opt-level = 3
+[profile.dev.package.ark-std]
+opt-level = 3
+[profile.dev.package.num-bigint]
+opt-level = 3
+[profile.dev.package.num-traits]
+opt-level = 3
+[profile.dev.package.zkvote-prover]
+opt-level = 3

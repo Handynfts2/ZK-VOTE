@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { extractTxHash } from "../lib/utils";
 import { notifyEvent } from "../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
   MAX_NAME_LENGTH,
   normalizeTwitterHandle,
   getTwitterUrl,
+  isValidHexColor,
 } from "../lib/daoMetadata";
 import { Button } from "./ui/Button";
 import {
@@ -82,6 +83,7 @@ export default function DAOProfileEditor({
   const [twitter, setTwitter] = useState("");
   const [linkedin, setLinkedin] = useState("");
   const [github, setGithub] = useState("");
+  const [themeColor, setThemeColor] = useState("");
 
   // UI state
   const [isLoading, setIsLoading] = useState(true);
@@ -101,6 +103,7 @@ export default function DAOProfileEditor({
     twitter: string;
     linkedin: string;
     github: string;
+    themeColor: string;
   } | null>(null);
 
   // File input refs
@@ -122,6 +125,7 @@ export default function DAOProfileEditor({
               twitter: metadata.links?.twitter || "",
               linkedin: metadata.links?.linkedin || "",
               github: metadata.links?.github || "",
+              themeColor: metadata.themeColor || "",
             };
             setDescription(loadedProfile.description);
             setCoverImageCid(loadedProfile.coverImageCid);
@@ -130,6 +134,7 @@ export default function DAOProfileEditor({
             setTwitter(loadedProfile.twitter);
             setLinkedin(loadedProfile.linkedin);
             setGithub(loadedProfile.github);
+            setThemeColor(loadedProfile.themeColor);
             // Store original for change tracking
             setOriginalProfile(loadedProfile);
           }
@@ -146,6 +151,7 @@ export default function DAOProfileEditor({
           twitter: "",
           linkedin: "",
           github: "",
+          themeColor: "",
         });
       }
       setIsLoading(false);
@@ -197,7 +203,7 @@ export default function DAOProfileEditor({
     setSuccess(false);
 
     try {
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Check what changed
       const nameChanged = name.trim() !== daoName;
@@ -209,7 +215,8 @@ export default function DAOProfileEditor({
         (twitter.trim() ? normalizeTwitterHandle(twitter.trim()) : "") !==
           (originalProfile?.twitter || "") ||
         linkedin.trim() !== (originalProfile?.linkedin || "") ||
-        github.trim() !== (originalProfile?.github || "");
+        github.trim() !== (originalProfile?.github || "") ||
+        themeColor.trim() !== (originalProfile?.themeColor || "");
 
       // If nothing changed, show success and return
       if (!nameChanged && !metadataContentChanged) {
@@ -232,6 +239,7 @@ export default function DAOProfileEditor({
           description: description.trim(),
           coverImageCid: coverImageCid || undefined,
           profileImageCid: profileImageCid || undefined,
+          themeColor: themeColor.trim() || undefined,
           links: {
             website: website.trim() || undefined,
             twitter: twitter.trim()
@@ -297,6 +305,7 @@ export default function DAOProfileEditor({
             : null,
           linkedin: linkedin.trim() || null,
           github: github.trim() || null,
+          themeColor: themeColor.trim() || null,
         };
 
         const oldProfile = {
@@ -308,6 +317,7 @@ export default function DAOProfileEditor({
           twitter: originalProfile?.twitter || null,
           linkedin: originalProfile?.linkedin || null,
           github: originalProfile?.github || null,
+          themeColor: originalProfile?.themeColor || null,
         };
 
         // Calculate what changed
@@ -356,6 +366,12 @@ export default function DAOProfileEditor({
         }
         if (oldProfile.github !== newProfile.github) {
           changes.github = { old: oldProfile.github, new: newProfile.github };
+        }
+        if (oldProfile.themeColor !== newProfile.themeColor) {
+          changes.themeColor = {
+            old: oldProfile.themeColor,
+            new: newProfile.themeColor,
+          };
         }
 
         notifyEvent(daoId, "profile_updated", txHash, {
@@ -541,6 +557,54 @@ export default function DAOProfileEditor({
         </CardContent>
       </Card>
 
+      {/* Branding */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Branding</CardTitle>
+          <CardDescription>
+            Set an accent color to theme your DAO's page for members.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label htmlFor="themeColor">Accent Color</Label>
+          <div className="flex items-center gap-3">
+            <input
+              id="themeColor"
+              type="color"
+              value={
+                themeColor && isValidHexColor(themeColor)
+                  ? themeColor
+                  : "#3b82f6"
+              }
+              onChange={(e) => setThemeColor(e.target.value)}
+              className="h-10 w-14 rounded border border-input bg-background cursor-pointer"
+              aria-label="Pick accent color"
+            />
+            <Input
+              value={themeColor}
+              onChange={(e) => setThemeColor(e.target.value)}
+              placeholder="#3b82f6"
+              maxLength={7}
+              className="max-w-[10rem] font-mono"
+            />
+            {themeColor && (
+              <button
+                type="button"
+                onClick={() => setThemeColor("")}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {themeColor && !isValidHexColor(themeColor) && (
+            <p className="text-xs text-destructive">
+              Must be a 6-digit hex color, e.g. #3b82f6
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Social Links */}
       <Card>
         <CardHeader>
@@ -636,7 +700,11 @@ export default function DAOProfileEditor({
         <Button
           onClick={handleSave}
           disabled={
-            isSaving || isUploadingCover || isUploadingProfile || !name.trim()
+            isSaving ||
+            isUploadingCover ||
+            isUploadingProfile ||
+            !name.trim() ||
+            (themeColor.trim() !== "" && !isValidHexColor(themeColor.trim()))
           }
           size="lg"
         >

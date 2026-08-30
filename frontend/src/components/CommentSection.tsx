@@ -189,7 +189,8 @@ export default function CommentSection({
                   size="sm"
                   onClick={() => setVisibleCount((prev) => prev + 20)}
                 >
-                  Load more comments ({comments.length - visibleCount} remaining)
+                  Load more comments ({comments.length - visibleCount}{" "}
+                  remaining)
                 </Button>
               </div>
             )}

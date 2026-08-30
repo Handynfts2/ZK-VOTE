@@ -313,6 +313,7 @@ npm test               # Run tests
 
 - [TESTS.md](./TESTS.md) - Full test inventory
 - [THREAT_MODEL.md](./THREAT_MODEL.md) - Security threat model
+- [docs/README.md](./docs/README.md) - Documentation index (protocol, ZK circuits, migrations, resilience) plus a full-stack architecture diagram
 
 ## License
 

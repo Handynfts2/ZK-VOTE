@@ -1,0 +1,17 @@
+[package]
+name = "vdf"
+version = "0.1.0"
+edition = "2021"
+description = "Verifiable Delay Function (Wesolowski construction) for ZK-VOTE election randomness"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["alloc"] }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

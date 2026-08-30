@@ -3,6 +3,55 @@
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL || "http://localhost:3001";
 const RELAYER_AUTH_TOKEN = import.meta.env.VITE_RELAYER_AUTH_TOKEN || "";
 
+// ============================================
+// ERROR TYPES
+// ============================================
+
+export const ErrorCode = {
+  VOTE_ALREADY_CAST: "VOTE_ALREADY_CAST",
+  VOTING_PERIOD_CLOSED: "VOTING_PERIOD_CLOSED",
+  INVALID_PROOF: "INVALID_PROOF",
+  NOT_ELIGIBLE: "NOT_ELIGIBLE",
+  PROPOSAL_NOT_FOUND: "PROPOSAL_NOT_FOUND",
+  DAO_NOT_FOUND: "DAO_NOT_FOUND",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+  RATE_LIMITED: "RATE_LIMITED",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
+  TIMEOUT: "TIMEOUT",
+  NOT_FOUND: "NOT_FOUND",
+} as const;
+
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
+
+export interface StructuredError {
+  code: ErrorCode;
+  message: string;
+  details?: unknown;
+  requestId: string;
+  timestamp: string;
+}
+
+export interface ApiErrorResponse {
+  error: StructuredError | string;
+}
+
+/**
+ * Helper to safely extract the error message from an API response,
+ * maintaining backwards compatibility with older plain string errors.
+ */
+export function parseApiError(data: any): string {
+  if (!data || !data.error) return "Unknown error occurred";
+  if (typeof data.error === "string") return data.error;
+  return data.error.message || "Unknown error occurred";
+}
+
+export function getApiErrorCode(data: any): ErrorCode | undefined {
+  if (!data || !data.error || typeof data.error === "string") return undefined;
+  return data.error.code as ErrorCode;
+}
+
 // Relayer connection state
 interface RelayerState {
   connected: boolean;
@@ -21,6 +70,44 @@ const state: RelayerState = {
 // Subscribers for connection state changes
 type ConnectionListener = (connected: boolean) => void;
 const listeners: Set<ConnectionListener> = new Set();
+
+// Degraded auxiliary services (#204)
+type DegradationListener = (services: string[]) => void;
+const degradationListeners: Set<DegradationListener> = new Set();
+let lastDegradedServices: string[] = [];
+
+export function subscribeToServiceDegradation(
+  listener: DegradationListener,
+): () => void {
+  degradationListeners.add(listener);
+  listener(lastDegradedServices);
+  return () => degradationListeners.delete(listener);
+}
+
+export function getDegradedServices(): string[] {
+  return [...lastDegradedServices];
+}
+
+function notifyDegradation(services: string[]) {
+  const key = services.slice().sort().join(",");
+  const prev = lastDegradedServices.slice().sort().join(",");
+  lastDegradedServices = services;
+  if (key !== prev) {
+    degradationListeners.forEach((l) => l(services));
+  }
+}
+
+function readDegradedHeader(response: Response): void {
+  const header = response.headers.get("X-Service-Degraded");
+  if (header) {
+    notifyDegradation(
+      header
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+  }
+}
 
 export function subscribeToRelayerStatus(
   listener: ConnectionListener,
@@ -84,6 +171,39 @@ export interface FetchOptions extends RequestInit {
   skipBackoff?: boolean;
 }
 
+export class RelayerError extends Error {
+  status?: number;
+  code?: string;
+  isRateLimited: boolean;
+  isBackoff: boolean;
+  isNetworkError: boolean;
+
+  constructor(
+    message: string,
+    status?: number,
+    code?: string,
+    isNetworkError = false,
+  ) {
+    super(message);
+    this.name = "RelayerError";
+    this.status = status;
+    this.code = code;
+    this.isRateLimited = status === 429;
+    this.isBackoff = false;
+    this.isNetworkError = isNetworkError;
+  }
+}
+
+function mapBackendError(status: number, data?: any): string {
+  if (status === 429)
+    return "The network is congested. Please try again later.";
+  if (status === 503 || status === 504)
+    return "The blockchain network is currently unreachable. Operating in degraded mode.";
+  if (status === 500) return "An internal error occurred on the relayer.";
+  if (data && data.error) return data.error;
+  return "An unexpected error occurred.";
+}
+
 /**
  * Fetch with exponential backoff and relayer status tracking.
  * Will automatically retry failed requests with increasing delays.
@@ -92,20 +212,25 @@ export async function relayerFetch(
   endpoint: string,
   options: FetchOptions = {},
 ): Promise<Response> {
-  const { maxRetries = 3, skipBackoff = false, ...fetchOptions } = options;
+  // Default to not retrying write operations unless explicitly specified
+  const isWrite =
+    options.method &&
+    !["GET", "HEAD", "OPTIONS"].includes(options.method.toUpperCase());
+  const {
+    maxRetries = isWrite ? 1 : 3,
+    skipBackoff = false,
+    ...fetchOptions
+  } = options;
   const url = endpoint.startsWith("http")
     ? endpoint
     : `${RELAYER_URL}${endpoint}`;
 
   // Check if we're in backoff period
   if (!skipBackoff && isInBackoff()) {
-    const error = new Error("Relayer temporarily unavailable (backing off)");
-    (
-      error as Error & { isBackoff: boolean; isRateLimited: boolean }
-    ).isBackoff = true;
-    (
-      error as Error & { isBackoff: boolean; isRateLimited: boolean }
-    ).isRateLimited = false;
+    const error = new RelayerError(
+      "Relayer temporarily unavailable (backing off)",
+    );
+    error.isBackoff = true;
     throw error;
   }
 
@@ -131,9 +256,7 @@ export async function relayerFetch(
 
         // On last attempt, throw an error
         if (attempt >= maxRetries - 1) {
-          const error = new Error("Rate limited (429) - too many requests");
-          (error as Error & { isRateLimited: boolean }).isRateLimited = true;
-          throw error;
+          throw new RelayerError(mapBackendError(429), 429);
         }
 
         // Wait longer for rate limits - use Retry-After header if present
@@ -145,19 +268,61 @@ export async function relayerFetch(
         continue;
       }
 
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          // Ignore parse errors if no JSON
+        }
+
+        const errorMessage = mapBackendError(response.status, errorData);
+        lastError = new RelayerError(
+          errorMessage,
+          response.status,
+          errorData?.code,
+        );
+
+        // Don't retry client errors (except 429 which is handled above)
+        if (response.status >= 400 && response.status < 500) {
+          throw lastError;
+        }
+
+        throw lastError; // Throw so catch block can handle retries for 5xx
+      }
+
       // Success - reset failure count
       markSuccess();
+      readDegradedHeader(response);
       return response;
     } catch (error) {
-      lastError = error as Error;
+      if (
+        error instanceof RelayerError &&
+        error.status &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 429
+      ) {
+        throw error;
+      }
+
+      lastError =
+        error instanceof RelayerError
+          ? error
+          : new RelayerError(
+              "Unable to reach the relayer service. Please check your internet connection.",
+              undefined,
+              undefined,
+              true,
+            );
 
       // Don't retry on abort
-      if (lastError.name === "AbortError") {
-        throw lastError;
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
       }
 
       // Don't retry on rate limit errors (already handled max retries)
-      if ((lastError as Error & { isRateLimited?: boolean }).isRateLimited) {
+      if (lastError instanceof RelayerError && lastError.isRateLimited) {
         throw lastError;
       }
 
@@ -172,12 +337,20 @@ export async function relayerFetch(
     }
   }
 
-  throw lastError || new Error("Failed to fetch from relayer");
+  throw (
+    lastError ||
+    new RelayerError(
+      "Unable to reach the relayer service. Please check your internet connection.",
+      undefined,
+      undefined,
+      true,
+    )
+  );
 }
 
 /**
  * Health check for the relayer.
- * Returns true if connected, false otherwise.
+ * Returns true if connected (including degraded mode), false otherwise.
  */
 export async function checkRelayerHealth(): Promise<boolean> {
   try {
@@ -185,9 +358,58 @@ export async function checkRelayerHealth(): Promise<boolean> {
       maxRetries: 1,
       skipBackoff: true,
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const body = (await response.json()) as {
+      status?: string;
+      services?: HealthServicesSnapshot;
+    };
+    if (body.services) {
+      notifyDegradation([
+        ...(body.services.degraded ?? []),
+        ...(body.services.unavailable ?? []),
+      ]);
+    } else if (body.status === "ok") {
+      notifyDegradation([]);
+    }
+    // Degraded still means the API is reachable
+    return body.status === "ok" || body.status === "degraded" || response.ok;
   } catch {
     return false;
+  }
+}
+
+export interface HealthServicesSnapshot {
+  status: "ok" | "degraded";
+  degraded: string[];
+  unavailable: string[];
+}
+
+/** Fetch /health service degradation details for the UI banner. */
+export async function checkRelayerHealthDetails(): Promise<HealthServicesSnapshot | null> {
+  try {
+    const response = await relayerFetch("/health", {
+      maxRetries: 1,
+      skipBackoff: true,
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      status?: string;
+      services?: HealthServicesSnapshot;
+    };
+    if (body.services) {
+      notifyDegradation([
+        ...(body.services.degraded ?? []),
+        ...(body.services.unavailable ?? []),
+      ]);
+      return body.services;
+    }
+    return {
+      status: body.status === "degraded" ? "degraded" : "ok",
+      degraded: [],
+      unavailable: [],
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -246,4 +468,47 @@ export async function notifyEvent(
     // Log but don't throw - this is best-effort
     console.warn("Failed to notify relayer of event:", error);
   }
+}
+
+export interface CommitVoteInput {
+  daoId: number;
+  proposalId: number;
+  nullifier: string;
+  commitmentHash: string;
+  timestamp: number;
+  walletAddress?: string;
+}
+
+/**
+ * Commit to a proof hash before revealing
+ */
+export async function commitVoteProof(input: CommitVoteInput): Promise<{
+  success: boolean;
+  commitmentHash: string;
+  expiresAt: string;
+}> {
+  const response = await relayerFetch("/vote/commit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || "Failed to commit vote proof");
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch relayer public key for proof encryption
+ */
+export async function fetchRelayerPublicKey(): Promise<string> {
+  const response = await relayerFetch("/relayer/pubkey");
+  if (!response.ok) {
+    throw new Error("Failed to fetch relayer public key");
+  }
+  const data = await response.json();
+  return data.publicKey;
 }

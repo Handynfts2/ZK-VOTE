@@ -54,11 +54,35 @@ Two inputs (left=0, right=0) - empty node:
   Inputs:  [0, 0]
   Hash:    14744269619966411208579211824598458697587494354926760081771325075741142829156
 
-Merkle Tree Zero Values:
-zeros[0] = 0
-zeros[1] = 14744269619966411208579211824598458697587494354926760081771325075741142829156
-zeros[2] = 7423237065226347324353380772367382631490014989348495481811164164159255474657
-zeros[3] = 11286972368698509976183087595462810875513684078608517520839298933882497716792
+Raw Poseidon(2) zero chain (parameter parity only — not the tree's actual
+empty-leaf value, see below):
+raw[0] = 0
+raw[1] = 14744269619966411208579211824598458697587494354926760081771325075741142829156
+raw[2] = 7423237065226347324353380772367382631490014989348495481811164164159255474657
+raw[3] = 11286972368698509976183087595462810875513684078608517520839298933882497716792
+```
+
+### Domain-Separated Leaf Hashing (#167)
+
+The tree does **not** insert a raw commitment (or `0` for an empty leaf)
+directly as a tree value. Every leaf is first hashed with a fixed tag:
+`leafHash = Poseidon(LEAF_DOMAIN, leaf)` with `LEAF_DOMAIN = 1`. This closes a
+second-preimage hole: without it, an attacker who finds `C1, C2` such that
+`Poseidon(C1, C2) == C_target` could register `C1`/`C2` as two members, then
+present `C_target` as a forged leaf at a shallower depth — since leaves and
+internal-node hashes lived in the same, indistinguishable value space. Every
+implementation (`circuits/merkle_tree.circom`, `frontend/src/lib/merkletree.ts`,
+`contracts/membership-tree/src/lib.rs`) must use the same `LEAF_DOMAIN` and
+apply it identically, or Merkle proofs will silently fail to verify.
+
+Run `node utils/poseidon_kat.js` to regenerate; current values:
+
+```
+Merkle Tree Zero Values (domain-separated):
+zeros[0] = 18423194802802147121294641945063302532319431080857859605204660473644265519999
+zeros[1] = 10095840990547086393948069857778488018173381758268035334446636573002499075634
+zeros[2] = 10452537397502567075357414940778164908025902346793051826780339195520977423558
+zeros[3] = 6113290778132335551082908708188728940765971492572731501321771724956141922341
 ```
 
 ### Step 2: Verify On-Chain (Stellar P25)

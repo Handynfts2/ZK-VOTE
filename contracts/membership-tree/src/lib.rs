@@ -118,6 +118,15 @@ pub struct ReinstatementEvent {
 
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
+pub struct ExclusionProofVerified {
+    #[topic]
+    pub dao_id: u64,
+    pub commitment: U256,
+    pub is_revoked: bool,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractUpgraded {
     pub from: u32,
     pub to: u32,
@@ -381,11 +390,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);
@@ -464,11 +475,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);
@@ -566,11 +579,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);
@@ -733,16 +748,19 @@ impl MembershipTree {
 
             // Get sibling value from stored node hashes (O(1) lookup)
             let sibling = if level == 0 {
-                // Level 0: sibling is a raw leaf (commitment value)
+                // Level 0: sibling is a leaf, domain-tagged the same way the
+                // circuit and insert_leaf hash it (#167) — LeafValue stores
+                // the raw commitment for admin/removal checks, so it must be
+                // hashed here before use as a tree node value.
                 if sibling_index < next_index {
                     let leaf_key = DataKey::LeafValue(dao_id, sibling_index);
-                    env.storage()
-                        .persistent()
-                        .get(&leaf_key)
-                        .unwrap_or_else(|| Self::zero_value(&env))
+                    match env.storage().persistent().get::<_, U256>(&leaf_key) {
+                        Some(raw_leaf) => Self::hash_leaf(&env, &raw_leaf, &field),
+                        None => Self::zero_at_level_for_field(&env, level, &field),
+                    }
                 } else {
-                    // Sibling leaf doesn't exist, use zero
-                    Self::zero_value(&env)
+                    // Sibling leaf doesn't exist, use the domain-tagged zero.
+                    Self::zero_at_level_for_field(&env, level, &field)
                 }
             } else {
                 // Level > 0: look up stored node hash (written during insert_leaf)
@@ -946,6 +964,32 @@ impl MembershipTree {
         result
     }
 
+    /// Verify exclusion proof: check if a commitment is NOT in the current tree
+    /// Used by voting contract to enforce that revoked members cannot vote
+    /// Returns true if commitment has been revoked and is not in tree
+    pub fn verify_exclusion(env: Env, dao_id: u64, commitment: U256) -> bool {
+        Self::bump_instance(&env);
+
+        let revocation_ts = Self::revok_at(env.clone(), dao_id, commitment.clone());
+        if revocation_ts.is_none() {
+            return false;
+        }
+
+        let leaf_index_key = DataKey::LeafIndex(dao_id, commitment.clone());
+        let leaf_value_key = if let Some(index) = env.storage().persistent().get::<_, Option<u32>>(&leaf_index_key) {
+            Some(DataKey::LeafValue(dao_id, index.unwrap_or(0)))
+        } else {
+            None
+        };
+
+        if let Some(key) = leaf_value_key {
+            let current_value: U256 = env.storage().persistent().get(&key).unwrap_or_else(|| U256::zero(&env));
+            current_value == Self::zero_value(&env)
+        } else {
+            true
+        }
+    }
+
     // Internal: Insert leaf and update tree
     // Also stores intermediate node hashes at each level for O(depth) merkle path lookups
     fn insert_leaf(env: &Env, dao_id: u64, leaf: U256, index: u32, depth: u32) -> (U256, u32) {
@@ -960,8 +1004,10 @@ impl MembershipTree {
         // Since all siblings are zeros, we can compute the root in a tight loop
         // without repeatedly calling zero_at_level
         if index == 0 {
-            filled.set(0, leaf.clone());
-            let mut current_hash = leaf;
+            // Domain-separate the leaf before it becomes a tree node value (#167).
+            let leaf_hash = Self::hash_leaf(env, &leaf, &field);
+            filled.set(0, leaf_hash.clone());
+            let mut current_hash = leaf_hash;
             let mut current_index = index;
             for level in 0..depth {
                 let zero = Self::zero_at_level_for_field(env, level, &field);
@@ -1020,7 +1066,8 @@ impl MembershipTree {
         }
 
         // General case for index > 0
-        let mut current_hash = leaf;
+        // Domain-separate the leaf before it becomes a tree node value (#167).
+        let mut current_hash = Self::hash_leaf(env, &leaf, &field);
         let mut current_index = index;
 
         for i in 0..depth {
@@ -1112,8 +1159,9 @@ impl MembershipTree {
         Self::bump_persistent(env, &leaf_val_key);
 
         // Recompute path from leaf to root
+        // Domain-separate the leaf before it becomes a tree node value (#167).
         let mut current_index = leaf_index;
-        let mut current_hash = new_value;
+        let mut current_hash = Self::hash_leaf(env, &new_value, &field);
 
         for level in 0..depth {
             let is_left = current_index.is_multiple_of(2);
@@ -1125,11 +1173,17 @@ impl MembershipTree {
 
             // Get sibling hash from stored NodeHash or use zero if doesn't exist
             let sibling: U256 = if level == 0 {
-                // At leaf level, sibling is another leaf value
-                env.storage()
+                // At leaf level, sibling is another leaf: hash it the same way
+                // the sibling's own insertion did, since LeafValue stores the
+                // raw commitment (used elsewhere for admin/removal checks).
+                match env
+                    .storage()
                     .persistent()
-                    .get(&DataKey::LeafValue(dao_id, sibling_index))
-                    .unwrap_or_else(|| Self::zero_at_level_for_field(env, level, &field))
+                    .get::<_, U256>(&DataKey::LeafValue(dao_id, sibling_index))
+                {
+                    Some(raw_sibling) => Self::hash_leaf(env, &raw_sibling, &field),
+                    None => Self::zero_at_level_for_field(env, level, &field),
+                }
             } else {
                 // At higher levels, sibling is stored in NodeHash
                 env.storage()
@@ -1239,6 +1293,17 @@ impl MembershipTree {
         Self::bump_persistent(env, rc_key);
     }
 
+    // Internal: domain-separates a raw leaf commitment before it enters the
+    // tree as a node value (#167). Uses the same 2-input `hash_pair` the
+    // rest of the tree uses (LEAF_DOMAIN, leaf) — deliberately not a wider
+    // hash, since minting new Poseidon parameters for a different input
+    // width is a real ceremony this change does not attempt. Must match
+    // LEAF_DOMAIN in circuits/merkle_tree.circom and frontend/src/lib/merkletree.ts.
+    fn hash_leaf(env: &Env, leaf: &U256, field: &Symbol) -> U256 {
+        let leaf_domain = U256::from_u32(env, 1);
+        Self::hash_pair(env, &leaf_domain, leaf, field)
+    }
+
     // Internal: Poseidon hash of two U256 values using cached params for the given field
     fn hash_pair(env: &Env, left: &U256, right: &U256, field: &Symbol) -> U256 {
         Self::ensure_poseidon_params_cached(env, field);
@@ -1307,7 +1372,9 @@ impl MembershipTree {
 
         let field = Symbol::new(env, "BN254");
         let mut zeros = Vec::new(env);
-        let mut current = Self::zero_value(env);
+        // zeros[0] is the domain-tagged hash of the empty leaf (#167), matching
+        // hash_leaf's output for a zero commitment — not the raw zero value.
+        let mut current = Self::hash_leaf(env, &Self::zero_value(env), &field);
         zeros.push_back(current.clone());
 
         for _ in 0..MAX_TREE_DEPTH {
@@ -1326,7 +1393,9 @@ impl MembershipTree {
 
         let field = Symbol::new(env, "BLS12_381");
         let mut zeros = Vec::new(env);
-        let mut current = Self::zero_value(env);
+        // zeros[0] is the domain-tagged hash of the empty leaf (#167), matching
+        // hash_leaf's output for a zero commitment — not the raw zero value.
+        let mut current = Self::hash_leaf(env, &Self::zero_value(env), &field);
         zeros.push_back(current.clone());
 
         for _ in 0..MAX_TREE_DEPTH {

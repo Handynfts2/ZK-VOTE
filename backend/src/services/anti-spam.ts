@@ -1,5 +1,7 @@
 import { initDb } from "./db.js";
 import { log } from "./logger.js";
+import { kysely } from "./kysely.js";
+import { sql } from "kysely";
 
 export interface FlagResult {
   success: boolean;
@@ -24,11 +26,16 @@ export function checkCommitmentRateLimit(
   const database = initDb();
   const windowStart = Math.floor(Date.now() / windowMs) * windowMs;
 
-  const row = database
-    .prepare(
-      "SELECT count FROM comment_submissions WHERE commitment = ? AND dao_id = ? AND proposal_id = ? AND window_start = ?",
-    )
-    .get(commitment, daoId, proposalId, windowStart) as
+  const query = kysely
+    .selectFrom("comment_submissions")
+    .select("count")
+    .where("commitment", "=", commitment)
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .where("window_start", "=", windowStart)
+    .compile();
+
+  const row = database.prepare(query.sql).get(...query.parameters) as
     | { count: number }
     | undefined;
 
@@ -55,16 +62,23 @@ export function recordCommentSubmission(
   const database = initDb();
   const windowStart = Math.floor(Date.now() / windowMs) * windowMs;
 
-  database
-    .prepare(
-      `
-    INSERT INTO comment_submissions (commitment, dao_id, proposal_id, window_start, count)
-    VALUES (?, ?, ?, ?, 1)
-    ON CONFLICT(commitment, dao_id, proposal_id, window_start)
-    DO UPDATE SET count = count + 1
-  `,
+  const query = kysely
+    .insertInto("comment_submissions")
+    .values({
+      commitment,
+      dao_id: daoId,
+      proposal_id: proposalId,
+      window_start: windowStart,
+      count: 1,
+    })
+    .onConflict((oc) =>
+      oc
+        .columns(["commitment", "dao_id", "proposal_id", "window_start"])
+        .doUpdateSet({ count: sql`count + 1` }),
     )
-    .run(commitment, daoId, proposalId, windowStart);
+    .compile();
+
+  database.prepare(query.sql).run(...query.parameters);
 }
 
 export function flagComment(
@@ -77,18 +91,31 @@ export function flagComment(
 ): FlagResult {
   const database = initDb();
 
+  const existingQuery = kysely
+    .selectFrom("comment_flags")
+    .select("id")
+    .where("comment_id", "=", commentId)
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .where("flagger_nullifier", "=", flaggerNullifier)
+    .compile();
+
   const existing = database
-    .prepare(
-      "SELECT id FROM comment_flags WHERE comment_id = ? AND dao_id = ? AND proposal_id = ? AND flagger_nullifier = ?",
-    )
-    .get(commentId, daoId, proposalId, flaggerNullifier);
+    .prepare(existingQuery.sql)
+    .get(...existingQuery.parameters);
 
   if (existing) {
+    const countQuery = kysely
+      .selectFrom("comment_flags")
+      .select(sql<number>`COUNT(*)`.as("cnt"))
+      .where("comment_id", "=", commentId)
+      .where("dao_id", "=", daoId)
+      .where("proposal_id", "=", proposalId)
+      .compile();
+
     const countRow = database
-      .prepare(
-        "SELECT COUNT(*) as cnt FROM comment_flags WHERE comment_id = ? AND dao_id = ? AND proposal_id = ?",
-      )
-      .get(commentId, daoId, proposalId) as { cnt: number };
+      .prepare(countQuery.sql)
+      .get(...countQuery.parameters) as { cnt: number };
 
     log("info", "comment_flag_duplicate", { commentId, daoId, proposalId });
     return {
@@ -99,32 +126,54 @@ export function flagComment(
     };
   }
 
-  database
-    .prepare(
-      `
-    INSERT INTO comment_flags (comment_id, dao_id, proposal_id, flagger_commitment, flagger_nullifier)
-    VALUES (?, ?, ?, ?, ?)
-  `,
-    )
-    .run(commentId, daoId, proposalId, flaggerCommitment, flaggerNullifier);
+  const insertFlagQuery = kysely
+    .insertInto("comment_flags")
+    .values({
+      comment_id: commentId,
+      dao_id: daoId,
+      proposal_id: proposalId,
+      flagger_commitment: flaggerCommitment,
+      flagger_nullifier: flaggerNullifier,
+    })
+    .compile();
+
+  database.prepare(insertFlagQuery.sql).run(...insertFlagQuery.parameters);
+
+  const countQuery = kysely
+    .selectFrom("comment_flags")
+    .select(sql<number>`COUNT(*)`.as("cnt"))
+    .where("comment_id", "=", commentId)
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .compile();
 
   const countRow = database
-    .prepare(
-      "SELECT COUNT(*) as cnt FROM comment_flags WHERE comment_id = ? AND dao_id = ? AND proposal_id = ?",
-    )
-    .get(commentId, daoId, proposalId) as { cnt: number };
+    .prepare(countQuery.sql)
+    .get(...countQuery.parameters) as { cnt: number };
 
   const hidden = countRow.cnt >= threshold;
 
   if (hidden) {
-    database
-      .prepare(
-        `
-      INSERT OR REPLACE INTO hidden_comments (comment_id, dao_id, proposal_id, flag_count, hidden_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-    `,
+    const insertHiddenQuery = kysely
+      .insertInto("hidden_comments")
+      .values({
+        comment_id: commentId,
+        dao_id: daoId,
+        proposal_id: proposalId,
+        flag_count: countRow.cnt,
+        hidden_at: sql`datetime('now')`,
+      })
+      .onConflict((oc) =>
+        oc.columns(["comment_id", "dao_id", "proposal_id"]).doUpdateSet({
+          flag_count: countRow.cnt,
+          hidden_at: sql`datetime('now')`,
+        }),
       )
-      .run(commentId, daoId, proposalId, countRow.cnt);
+      .compile();
+
+    database
+      .prepare(insertHiddenQuery.sql)
+      .run(...insertHiddenQuery.parameters);
 
     log("info", "comment_auto_hidden", {
       commentId,
@@ -154,17 +203,29 @@ export function getFlagStatus(
 ): FlagStatus {
   const database = initDb();
 
+  const flagCountQuery = kysely
+    .selectFrom("comment_flags")
+    .select(sql<number>`COUNT(*)`.as("cnt"))
+    .where("comment_id", "=", commentId)
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .compile();
+
   const flagCount = database
-    .prepare(
-      "SELECT COUNT(*) as cnt FROM comment_flags WHERE comment_id = ? AND dao_id = ? AND proposal_id = ?",
-    )
-    .get(commentId, daoId, proposalId) as { cnt: number };
+    .prepare(flagCountQuery.sql)
+    .get(...flagCountQuery.parameters) as { cnt: number };
+
+  const hiddenQuery = kysely
+    .selectFrom("hidden_comments")
+    .select("comment_id")
+    .where("comment_id", "=", commentId)
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .compile();
 
   const hidden = database
-    .prepare(
-      "SELECT comment_id FROM hidden_comments WHERE comment_id = ? AND dao_id = ? AND proposal_id = ?",
-    )
-    .get(commentId, daoId, proposalId);
+    .prepare(hiddenQuery.sql)
+    .get(...hiddenQuery.parameters);
 
   return {
     flagged: flagCount.cnt > 0,
@@ -178,11 +239,16 @@ export function getHiddenCommentIds(
   proposalId: number,
 ): number[] {
   const database = initDb();
-  const rows = database
-    .prepare(
-      "SELECT comment_id FROM hidden_comments WHERE dao_id = ? AND proposal_id = ?",
-    )
-    .all(daoId, proposalId) as Array<{ comment_id: number }>;
+  const query = kysely
+    .selectFrom("hidden_comments")
+    .select("comment_id")
+    .where("dao_id", "=", daoId)
+    .where("proposal_id", "=", proposalId)
+    .compile();
+
+  const rows = database.prepare(query.sql).all(...query.parameters) as Array<{
+    comment_id: number;
+  }>;
 
   return rows.map((r) => r.comment_id);
 }

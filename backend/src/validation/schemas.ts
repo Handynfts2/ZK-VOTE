@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { BN254_MODULUS } from "../config.js";
+import { BN254_FQ_MODULUS } from "../types/index.js";
 
 // ============================================
 // PRIMITIVE VALIDATORS
@@ -54,38 +55,70 @@ const bn254Field = z.string().refine(
  * In a valid Groth16 proof, A, B, and C must NOT be the point at infinity.
  * Additional curve membership validation is performed on-chain by the host functions.
  */
+/**
+ * Splits a padded, even-length hex string into `count` equal-size
+ * coordinates and checks each is a valid BN254 base-field (Fq) element
+ * (i.e. < BN254_FQ_MODULUS). This rejects obviously-malformed proof
+ * coordinates before they ever reach the relayer or chain (#167); it does
+ * NOT perform curve/subgroup membership verification — that remains the
+ * Soroban host's job at proof-verification time (see module comment above).
+ */
+function coordinatesInFieldRange(paddedHex: string, count: number): boolean {
+  const coordHexLen = paddedHex.length / count;
+  for (let i = 0; i < count; i++) {
+    const coordHex = paddedHex.slice(i * coordHexLen, (i + 1) * coordHexLen);
+    if (BigInt("0x" + coordHex) >= BN254_FQ_MODULUS) return false;
+  }
+  return true;
+}
+
 const proofA = hexString(128).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(128, "0");
     // G1 point at infinity (all zeros) is invalid for proof.a
-    return !/^0*$/.test(hex.padStart(128, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.a cannot be all zeros (point at infinity)" },
+  {
+    message:
+      "proof.a cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 const proofB = hexString(256).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(256, "0");
     // G2 point at infinity (all zeros) is invalid for proof.b
     // Note: G2 has 4 field elements (X_c1, X_c0, Y_c1, Y_c0), all must be non-zero collectively
-    return !/^0*$/.test(hex.padStart(256, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 4); // X_c1, X_c0, Y_c1, Y_c0
   },
-  { message: "proof.b cannot be all zeros (point at infinity)" },
+  {
+    message:
+      "proof.b cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 const proofC = hexString(128).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(128, "0");
     // G1 point at infinity (all zeros) is invalid for proof.c
-    return !/^0*$/.test(hex.padStart(128, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.c cannot be all zeros (point at infinity)" },
+  {
+    message:
+      "proof.c cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 /**
  * Groth16 proof object
  */
-const groth16Proof = z.object({
+export const groth16Proof = z.object({
   a: proofA,
   b: proofB,
   c: proofC,
@@ -98,12 +131,15 @@ const groth16Proof = z.object({
 /**
  * Positive integer validator for DAO/Proposal/Comment IDs
  */
-const positiveInteger = z.string().pipe(
-  z.coerce.number()
-    .positive("Must be a positive integer")
-    .int("Must be an integer")
-    .max(Number.MAX_SAFE_INTEGER, "Value too large")
-);
+const positiveInteger = z
+  .string()
+  .pipe(
+    z.coerce
+      .number()
+      .positive("Must be a positive integer")
+      .int("Must be an integer")
+      .max(Number.MAX_SAFE_INTEGER, "Value too large"),
+  );
 
 /**
  * IPFS CID validator (CIDv0 or CIDv1)
@@ -113,9 +149,15 @@ const CIDV1_REGEX = /^baf[a-z2-7]{46,120}$/i;
 
 const ipfsCid = z.string().refine(
   (val) => {
+    // CIDv0: exact-length Bitcoin base58 encoding.
+    if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(val)) return true;
+    // CIDv1: bafy... or bafk... (59+ chars)
+    if ((val.startsWith("bafy") || val.startsWith("bafk")) && val.length >= 59)
+      return true;
+    return false;
     if (!val || typeof val !== "string") return false;
     const trimmed = val.trim();
-    if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
+    if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) return false;
     return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
   },
   { message: "Invalid IPFS CID format" },
@@ -224,23 +266,56 @@ const txHash = z
   .regex(/^[0-9a-fA-F]{64}$/, "Invalid transaction hash format");
 
 // ============================================
-// VOTE SCHEMA
+// PROOF COMMITMENT SCHEMA
 // ============================================
 
-export const voteSchema = z.object({
+export const commitSchema = z.object({
   daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
   proposalId: z
     .number()
     .int()
     .nonnegative("proposalId must be a non-negative integer"),
-  choice: z.boolean({
-    required_error: "choice is required",
-    invalid_type_error: "choice must be a boolean",
-  }),
   nullifier: bn254Field,
-  root: bn254Field,
-  proof: groth16Proof,
+  commitmentHash: commitmentHash,
+  timestamp: z.number().int().positive("timestamp must be a positive integer"),
+  walletAddress: z.string().optional(),
 });
+
+export type CommitRequest = z.infer<typeof commitSchema>;
+
+// ============================================
+// VOTE SCHEMA
+// ============================================
+
+export const voteSchema = z
+  .object({
+    daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+    proposalId: z
+      .number()
+      .int()
+      .nonnegative("proposalId must be a non-negative integer"),
+    choice: z.boolean({
+      required_error: "choice is required",
+      invalid_type_error: "choice must be a boolean",
+    }),
+    nullifier: bn254Field.optional(),
+    root: bn254Field.optional(),
+    proof: groth16Proof.optional(),
+    nonce: z.string().optional(),
+    timestamp: z.number().int().optional(),
+    walletAddress: z.string().optional(),
+    encryptedPayload: z.union([z.string(), z.record(z.unknown())]).optional(),
+    voterPublicKey: stellarAddress.optional(),
+    voterSignature: z.string().min(1).optional(), // signed XDR from Freighter
+  })
+  .refine(
+    (data) =>
+      data.encryptedPayload || (data.nullifier && data.root && data.proof),
+    {
+      message:
+        "Either encryptedPayload or full vote payload (nullifier, root, proof) must be provided",
+    },
+  );
 
 export type VoteRequest = z.infer<typeof voteSchema>;
 
@@ -379,28 +454,82 @@ export type CommentMetadata = z.infer<typeof commentMetadataSchema>;
 // QUERY PARAMETER SCHEMAS
 // ============================================
 
-export const paginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+const MAX_PAGE_SIZE = 500;
+const DEFAULT_PAGE_SIZE = 100;
+
+export const limitOffsetPaginationSchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PAGE_SIZE)
+    .default(DEFAULT_PAGE_SIZE),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const eventsQuerySchema = paginationSchema.extend({
+export const cursorPaginationSchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PAGE_SIZE)
+    .default(DEFAULT_PAGE_SIZE),
+  cursor: z.string().optional(),
+});
+
+export const eventsQuerySchema = cursorPaginationSchema.extend({
   types: z
     .string()
     .optional()
     .transform((val) => val?.split(",").filter(Boolean) || null),
   orderBy: z
-    .enum(['id', 'timestamp', 'ledger', 'type', 'verified', 'created_at'])
-    .default('timestamp'),
-  orderDirection: z
-    .enum(['ASC', 'DESC'])
-    .default('DESC'),
+    .enum(["id", "timestamp", "ledger", "type", "verified", "created_at"])
+    .default("timestamp"),
+  orderDirection: z.enum(["ASC", "DESC"]).default("DESC"),
+  cursorField: z.enum(["id", "ledger", "timestamp"]).default("id"),
+});
+
+/**
+ * `GET /daos` pages on limit/offset but advertises the next page as the opaque
+ * `pagination.cursor` string. Clients echo that value straight back, so `cursor`
+ * is accepted as an alias for `offset` and folded into it here; an unparseable
+ * cursor is rejected as a 400 rather than silently restarting from page one.
+ */
+export const daosQuerySchema = limitOffsetPaginationSchema
+  .extend({
+    user: stellarAddress.optional(),
+    cursor: z.coerce.number().int().min(0).optional(),
+  })
+  .transform(({ cursor, offset, ...rest }) => ({
+    ...rest,
+    offset: cursor ?? offset,
+  }));
+
+export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
+  types: z
+    .string()
+    .optional()
+    .transform((val) => val?.split(",").filter(Boolean) || null),
 });
 
 export const commentNonceQuerySchema = z.object({
   commitment: bn254Field,
 });
 
-export const daosQuerySchema = z.object({
-  user: stellarAddress.optional(),
+// ============================================
+// VOTE-TO-EARN CLAIM SCHEMA
+// ============================================
+
+export const claimSchema = z.object({
+  daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+  proposalId: z
+    .number()
+    .int()
+    .nonnegative("proposalId must be a non-negative integer"),
+  voteNullifier: bn254Field,
+  claimNullifier: bn254Field,
+  root: bn254Field,
+  proof: groth16Proof,
 });
+
+export type ClaimRequest = z.infer<typeof claimSchema>;

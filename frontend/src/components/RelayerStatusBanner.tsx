@@ -54,9 +54,10 @@ export function RelayerStatusBanner() {
           />
         </svg>
         <span>
-          Relayer disconnected.
-          {backoffSeconds > 0 && ` Retrying in ${backoffSeconds}s...`} Anonymous
-          voting and comments require the relayer.
+          <strong>Offline Mode / Degraded Service:</strong> The Soroban RPC or
+          relayer is currently unreachable.
+          {backoffSeconds > 0 && ` Retrying in ${backoffSeconds}s...`}
+          Anonymous voting and comments require the relayer.
         </span>
       </div>
       <button

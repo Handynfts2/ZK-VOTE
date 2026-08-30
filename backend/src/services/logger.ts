@@ -17,9 +17,19 @@ export interface RedactionPolicy {
 
 const DEFAULT_POLICY: RedactionPolicy = {
   redactedFields: [
-    "proof", "nullifier", "commitment", "secret", "token", 
-    "password", "jwt", "refresh_token", "access_token", 
-    "api_key", "private_key", "seed", "mnemonic"
+    "proof",
+    "nullifier",
+    "commitment",
+    "secret",
+    "token",
+    "password",
+    "jwt",
+    "refresh_token",
+    "access_token",
+    "api_key",
+    "private_key",
+    "seed",
+    "mnemonic",
   ],
   detailedLevels: ["debug"],
   showClientIp: "hash",
@@ -46,7 +56,7 @@ export function truncateStellarAddress(address: string): string {
 function applyRedaction(value: any, key: string, level: LogLevel): any {
   if (value && typeof value === "object" && value !== null) {
     if (Array.isArray(value)) {
-      return value.map(v => applyRedaction(v, key, level));
+      return value.map((v) => applyRedaction(v, key, level));
     }
     const result: any = {};
     for (const [k, v] of Object.entries(value)) {
@@ -56,10 +66,13 @@ function applyRedaction(value: any, key: string, level: LogLevel): any {
   }
 
   // Check if this field is in the redacted fields list
-  if (currentPolicy.redactedFields.some(f => 
-    key.toLowerCase().includes(f.toLowerCase()) || 
-    f.toLowerCase().includes(key.toLowerCase())
-  )) {
+  if (
+    currentPolicy.redactedFields.some(
+      (f) =>
+        key.toLowerCase().includes(f.toLowerCase()) ||
+        f.toLowerCase().includes(key.toLowerCase()),
+    )
+  ) {
     return "[REDACTED]";
   }
 
@@ -93,12 +106,15 @@ function applyRedaction(value: any, key: string, level: LogLevel): any {
 
 export function redact(meta: LogMeta, level: LogLevel = "info"): LogMeta {
   const isDetailed = currentPolicy.detailedLevels.includes(level);
-  
+
   const safe: LogMeta = {};
   for (const [key, value] of Object.entries(meta)) {
-    if (isDetailed && !currentPolicy.redactedFields.some(f => 
-      key.toLowerCase().includes(f.toLowerCase())
-    )) {
+    if (
+      isDetailed &&
+      !currentPolicy.redactedFields.some((f) =>
+        key.toLowerCase().includes(f.toLowerCase()),
+      )
+    ) {
       safe[key] = value;
       continue;
     }
@@ -163,13 +179,15 @@ export function log(level: LogLevel, event: string, meta: LogMeta = {}): void {
   if (levels.indexOf(level) < levels.indexOf(minLevel)) {
     return;
   }
-  console.log(JSON.stringify({
-    level,
-    event,
-    ts: new Date().toISOString(),
-    env: process.env.NODE_ENV || "development",
-    ...safe,
-  }));
+  console.log(
+    JSON.stringify({
+      level,
+      event,
+      ts: new Date().toISOString(),
+      env: process.env.NODE_ENV || "development",
+      ...safe,
+    }),
+  );
 }
 
 export const logger = createLogger(process.env.SERVICE_NAME || "relayer");

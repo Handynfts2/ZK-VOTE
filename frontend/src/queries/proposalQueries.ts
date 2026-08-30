@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyVoting } from "../lib/readOnlyContracts";
 import { calculateNullifier } from "../lib/zkproof";
 import { getZKCredentials } from "../lib/zk";
 import { queryKeys } from "../lib/queryClient";
-import type { Client as VotingClient } from "../contracts/voting/dist/index.js";
+import type { Client as VotingClient } from "../client/voting/dist/index.js";
 
 export interface Proposal {
   id: number;
@@ -17,6 +17,7 @@ export interface Proposal {
   voteMode: "Fixed" | "Trailing";
   endTime: number;
   vkVersion?: number | null;
+  isPendingVote?: boolean;
 }
 
 interface LoadProposalParams {
@@ -32,7 +33,7 @@ async function loadProposal({
 }: LoadProposalParams): Promise<Proposal | null> {
   try {
     const votingClient: VotingClient = publicKey
-      ? initializeContractClients(publicKey).voting
+      ? getZkVoteClient(publicKey).voting
       : getReadOnlyVoting();
 
     const proposalResult = await votingClient.get_proposal({
@@ -92,7 +93,7 @@ async function fetchProposals(
 ): Promise<Proposal[]> {
   // Get proposal count from contract
   const votingClient: VotingClient = publicKey
-    ? initializeContractClients(publicKey).voting
+    ? getZkVoteClient(publicKey).voting
     : getReadOnlyVoting();
 
   let proposalCount = 5; // Default fallback
@@ -150,4 +151,58 @@ export function useInvalidateProposals() {
       queryKey: queryKeys.proposals.list(daoId),
     });
   };
+}
+
+export function useOptimisticVote() {
+  const queryClient = useQueryClient();
+
+  const setOptimisticVote = (
+    daoId: number,
+    proposalId: number,
+    choice: boolean,
+  ) => {
+    const queryKey = queryKeys.proposals.list(daoId);
+
+    // Save previous state to be able to revert
+    const previousProposals = queryClient.getQueryData<Proposal[]>(queryKey);
+
+    // Optimistically update
+    queryClient.setQueryData<Proposal[]>(queryKey, (old) => {
+      if (!old) return old;
+      return old.map((p) => {
+        if (p.id === proposalId) {
+          return {
+            ...p,
+            hasVoted: true,
+            isPendingVote: true,
+            yesVotes: choice ? p.yesVotes + 1 : p.yesVotes,
+            noVotes: !choice ? p.noVotes + 1 : p.noVotes,
+          };
+        }
+        return p;
+      });
+    });
+
+    // Return a revert function
+    return () => {
+      if (previousProposals) {
+        queryClient.setQueryData(queryKey, previousProposals);
+      }
+    };
+  };
+
+  const clearPendingVote = (daoId: number, proposalId: number) => {
+    const queryKey = queryKeys.proposals.list(daoId);
+    queryClient.setQueryData<Proposal[]>(queryKey, (old) => {
+      if (!old) return old;
+      return old.map((p) => {
+        if (p.id === proposalId) {
+          return { ...p, isPendingVote: false };
+        }
+        return p;
+      });
+    });
+  };
+
+  return { setOptimisticVote, clearPendingVote };
 }

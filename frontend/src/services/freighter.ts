@@ -13,11 +13,23 @@ export interface FreighterApi {
   getUserInfo: () => Promise<{ publicKey: string }>;
   getPublicKey: () => Promise<string>;
   getNetwork: () => Promise<string>;
-  getNetworkDetails: () => Promise<{ network: string; networkUrl: string; networkPassphrase: string }>;
+  getNetworkDetails: () => Promise<{
+    network: string;
+    networkUrl: string;
+    networkPassphrase: string;
+  }>;
   requestAccess: () => Promise<string>;
+  signTransaction?: (
+    xdr: string,
+    opts?: { networkPassphrase?: string },
+  ) => Promise<string>;
   isLocked?: () => Promise<boolean>;
-  onAccountChange?: (callback: (account: string) => void) => { remove: () => void } | void;
-  onNetworkChange?: (callback: (network: string) => void) => { remove: () => void } | void;
+  onAccountChange?: (
+    callback: (account: string) => void,
+  ) => { remove: () => void } | void;
+  onNetworkChange?: (
+    callback: (network: string) => void,
+  ) => { remove: () => void } | void;
 }
 
 declare global {
@@ -82,14 +94,14 @@ export async function getFreighterNetworkDetails(): Promise<{
 export async function connectFreighter(): Promise<string> {
   if (!isFreighterInstalled()) {
     throw new Error(
-      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`
+      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`,
     );
   }
 
   const locked = await isFreighterLocked();
   if (locked) {
     throw new Error(
-      "Freighter wallet is locked. Please unlock your Freighter wallet and try again."
+      "Freighter wallet is locked. Please unlock your Freighter wallet and try again.",
     );
   }
 
@@ -124,7 +136,9 @@ export async function connectFreighter(): Promise<string> {
       throw new Error("Connection request declined by user.");
     }
     if (msg.toLowerCase().includes("locked")) {
-      throw new Error("Freighter wallet is locked. Please unlock Freighter and try again.");
+      throw new Error(
+        "Freighter wallet is locked. Please unlock Freighter and try again.",
+      );
     }
     throw new Error(msg || "Failed to connect to Freighter.");
   }
@@ -154,7 +168,9 @@ export function hasConnectionIntent(): boolean {
   }
 }
 
-export function listenToAccountChange(callback: (account: string | null) => void): () => void {
+export function listenToAccountChange(
+  callback: (account: string | null) => void,
+): () => void {
   const provider = getFreighterProvider();
   let currentAccount = "";
 
@@ -190,7 +206,9 @@ export function listenToAccountChange(callback: (account: string | null) => void
   return () => clearInterval(interval);
 }
 
-export function listenToNetworkChange(callback: (network: string | null) => void): () => void {
+export function listenToNetworkChange(
+  callback: (network: string | null) => void,
+): () => void {
   const provider = getFreighterProvider();
   let currentNetwork = "";
 
@@ -217,4 +235,53 @@ export function listenToNetworkChange(callback: (network: string | null) => void
   }, 3000);
 
   return () => clearInterval(interval);
+}
+
+/**
+ * Sign a vote payload using the voter's Stellar keypair via Freighter.
+ *
+ * We build a minimal ManageData transaction whose operation value is the
+ * first 28 bytes of SHA-256(payload).  Freighter signs it and returns the
+ * signed XDR.  We hand that XDR back to the backend, which re-derives the
+ * same transaction hash and verifies the ed25519 signature against the
+ * voter's public key.
+ */
+export async function signVotePayload(
+  payload: string,
+  publicKey: string,
+  networkPassphrase: string,
+): Promise<string> {
+  const provider = getFreighterProvider();
+  if (!provider || !provider.signTransaction) {
+    throw new Error("Freighter does not support transaction signing");
+  }
+
+  const { Account, TransactionBuilder, Operation, hash } =
+    await import("@stellar/stellar-sdk");
+
+  // hash() is SHA-256 from stellar-sdk, returns a Buffer
+  const payloadHash = hash(Buffer.from(payload, "utf8"));
+
+  // Dummy account — sequence 0, only used to build the tx structure
+  const account = new Account(publicKey, "0");
+
+  const tx = new TransactionBuilder(account, {
+    fee: "100",
+    networkPassphrase,
+  })
+    .addOperation(
+      Operation.manageData({
+        name: "vote_sig",
+        value: payloadHash.slice(0, 28), // ManageData value max 28 bytes
+      }),
+    )
+    .setTimeout(0)
+    .build();
+
+  // Freighter signs and returns the signed XDR string
+  const signedXdr = await provider.signTransaction(tx.toXDR(), {
+    networkPassphrase,
+  });
+
+  return signedXdr;
 }

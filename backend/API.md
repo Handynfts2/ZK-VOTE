@@ -54,6 +54,42 @@ The frontend's `relayerFetch` (`frontend/src/lib/api.ts`) already reads the `Ret
 
 Per-limiter request/block counters are available to authenticated callers via `GET /health` (`rateLimits` field).
 
+## Errors
+
+All endpoints return a structured error response when a request fails.
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message",
+    "details": { "optional": "additional context" },
+    "requestId": "abc123456789",
+    "timestamp": "2026-07-28T13:38:09.690Z"
+  }
+}
+```
+
+When the `RELAYER_GENERIC_ERRORS` environment variable is set to `true`, the `details` field is omitted to prevent leaking sensitive information.
+
+### Error Codes
+
+| Code | Description |
+|------|-------------|
+| `VOTE_ALREADY_CAST` | The voter has already cast a vote on the given proposal. |
+| `VOTING_PERIOD_CLOSED` | The proposal is no longer accepting votes. |
+| `INVALID_PROOF` | The ZK proof is invalid or malformed. |
+| `NOT_ELIGIBLE` | The voter's root does not match the DAO's state, meaning they are not eligible to vote. |
+| `PROPOSAL_NOT_FOUND` | The specified proposal does not exist. |
+| `DAO_NOT_FOUND` | The specified DAO does not exist. |
+| `RATE_LIMITED` | The client has exceeded the rate limit. |
+| `UNAUTHORIZED` | The request lacks a valid authentication token. |
+| `VALIDATION_ERROR` | The request payload or parameters are invalid. |
+| `SERVICE_UNAVAILABLE` | An external dependency (e.g., Soroban RPC) is unreachable. |
+| `TIMEOUT` | The request took too long to complete. |
+| `NOT_FOUND` | The requested resource does not exist. |
+| `INTERNAL_ERROR` | An unexpected server error occurred. |
+
 ## CORS
 
 Allowed methods: `GET`, `POST`
@@ -227,7 +263,7 @@ curl -X POST http://localhost:3001/vote \
   }'
 ```
 
-#### Response (200) -- Success
+#### Response (200) -- Success (new submission)
 
 ```json
 {
@@ -237,16 +273,45 @@ curl -X POST http://localhost:3001/vote \
 }
 ```
 
+#### Response (200) -- Already confirmed (idempotent replay)
+
+Returned when the same `nullifier` was used in a previous request that already landed on-chain. Safe to treat identically to a fresh success.
+
+```json
+{
+  "success": true,
+  "txHash": "abc123...64hex",
+  "status": "SUCCESS",
+  "replayed": true
+}
+```
+
+#### Response (202) -- Submission in progress
+
+Returned when the same `nullifier` is already in-flight from a previous request (e.g. a browser tab that closed mid-request and retried). The client **must** wait and retry after the indicated delay.
+
+**Headers:**
+
+| Header        | Value | Meaning                      |
+|---------------|-------|------------------------------|
+| `Retry-After` | `5`   | Seconds before retrying      |
+
+```json
+{
+  "success": false,
+  "txHash": null,
+  "status": "PENDING"
+}
+```
+
+The client should poll `GET /proposal/:daoId/:proposalId` or retry `POST /vote` with the same nullifier after `Retry-After` seconds to confirm the final outcome.
+
 #### Error Responses
 
 | Status | Error                          | Cause                                 |
 |--------|--------------------------------|---------------------------------------|
 | 400    | Validation error details       | Invalid request body (Zod validation) |
-| 400    | `"You have already voted on this proposal"` | Duplicate nullifier             |
-| 400    | `"Voting period has ended"`    | Proposal is closed                    |
-| 400    | `"Invalid vote proof"`         | Proof verification failed             |
-| 400    | `"You are not eligible to vote on this proposal"` | Root mismatch           |
-| 400    | `"Proposal not found"`         | Unknown proposal                      |
+| 400    | `"VOTE_REJECTED"`              | Proof invalid, ineligible voter, closed period, or duplicate — all unified under one code to prevent enumeration attacks |
 | 500    | `"Transaction failed"`         | On-chain transaction failed           |
 | 500    | `"Transaction submission failed"` | RPC submission error               |
 | 503    | `"Blockchain RPC temporarily unavailable - please retry"` | RPC down       |
@@ -415,7 +480,7 @@ curl -X POST http://localhost:3001/comment/anonymous \
 
 ### GET /comments/:daoId/:proposalId
 
-Get comments for a proposal with pagination.
+Get comments for a proposal with limit/offset pagination.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
@@ -429,22 +494,22 @@ Get comments for a proposal with pagination.
 
 #### Query Parameters
 
-| Parameter | Type     | Default | Description                      |
-|-----------|----------|---------|----------------------------------|
-| `limit`   | `string` | `"50"` | Max comments to return (capped at 100) |
-| `offset`  | `string` | `"0"`  | Number of comments to skip       |
+| Parameter | Type     | Default | Description                                      |
+|-----------|----------|---------|--------------------------------------------------|
+| `limit`   | `number` | `100`   | Max comments per page (max `500`)            |
+| `cursor`  | `string` | none    | Opaque cursor for fetching next page        |
 
 #### Example Request
 
 ```bash
-curl "http://localhost:3001/comments/0/1?limit=20&offset=0"
+curl "http://localhost:3001/comments/0/1?limit=20"
 ```
 
 #### Response (200)
 
 ```json
 {
-  "comments": [
+  "data": [
     {
       "id": 1,
       "daoId": 0,
@@ -461,9 +526,15 @@ curl "http://localhost:3001/comments/0/1?limit=20&offset=0"
       "isAnonymous": true
     }
   ],
-  "total": 1
+  "pagination": {
+    "cursor": "20",
+    "hasMore": true,
+    "total": 42
+  }
 }
 ```
+
+When `hasMore` is `false`, there are no additional pages.
 
 #### Error Responses
 
@@ -704,7 +775,7 @@ Flag a comment as spam. Comments are auto-hidden once `flagCount` reaches `FLAG_
 
 ### GET /daos
 
-Get all cached DAOs. Optionally include the requesting user's membership role for each DAO.
+Get cached DAOs with limit/offset pagination. Optionally include the requesting user's membership role for each DAO.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
@@ -714,6 +785,8 @@ Get all cached DAOs. Optionally include the requesting user's membership role fo
 | Parameter | Type     | Required | Description                                      |
 |-----------|----------|----------|--------------------------------------------------|
 | `user`    | `string` | No       | Stellar address (`G...`). When provided, each DAO includes a `role` field. |
+| `limit`   | `number` | No       | Max DAOs per page (max `500`, default `100`)  |
+| `cursor`  | `string` | No       | Opaque cursor for fetching next page        |
 
 #### Example Request
 
@@ -723,13 +796,16 @@ curl http://localhost:3001/daos
 
 # With user membership info
 curl "http://localhost:3001/daos?user=GABCDEF..."
+
+# Paginated request
+curl "http://localhost:3001/daos?limit=20"
 ```
 
-#### Response (200) -- Without user
+#### Response (200)
 
 ```json
 {
-  "daos": [
+  "data": [
     {
       "id": 0,
       "name": "My DAO",
@@ -741,37 +817,19 @@ curl "http://localhost:3001/daos?user=GABCDEF..."
       "updated_at": "2025-01-01T00:00:00Z"
     }
   ],
-  "total": 1,
+  "pagination": {
+    "cursor": "100",
+    "hasMore": true,
+    "total": 150
+  },
   "lastSync": "2025-01-01T00:00:00Z",
   "cached": true
 }
 ```
 
-#### Response (200) -- With user
+When `hasMore` is `false`, there are no additional pages. The `cursor` value should be passed as the `cursor` query parameter on the next request.
 
-Each DAO includes a `role` field:
-
-```json
-{
-  "daos": [
-    {
-      "id": 0,
-      "name": "My DAO",
-      "creator": "GABCDEF...",
-      "membership_open": true,
-      "members_can_propose": true,
-      "metadata_cid": null,
-      "member_count": 12,
-      "role": "admin"
-    }
-  ],
-  "total": 1,
-  "lastSync": "2025-01-01T00:00:00Z",
-  "cached": true
-}
-```
-
-The `role` field can be:
+The `role` field (when `user` is provided) can be:
 - `"admin"` -- User is the DAO admin
 - `"member"` -- User holds a membership SBT
 - `null` -- User is not a member
@@ -781,7 +839,7 @@ The `role` field can be:
 | Status | Error                              | Cause                      |
 |--------|------------------------------------|----------------------------|
 | 400    | `"Invalid Stellar address format"` | Malformed `user` parameter |
-| 500    | `"Failed to get DAOs"`             | Internal error             |
+| 500    | `"Failed to get DAOs"`           | Internal error             |
 
 ---
 
@@ -934,6 +992,54 @@ Paginated audit log review.
   "chainVerification": { "valid": true, "checkedCount": 1 }
 }
 ```
+
+### GET /admin/sbt-transfer-attempts
+
+Review flagged membership-SBT transfer/approval attempts for a DAO (#357).
+
+The membership-sbt contract always rejects `transfer`/`transfer_from`/`approve`
+(soulbound). `services/sbt-guard.ts` detects the attempt from the transaction
+envelope regardless of on-chain success/failure and records it as an
+`sbt_transfer_attempt` event.
+
+**Authentication:** Yes
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Query Parameters
+
+| Param    | Type     | Default | Description                        |
+|----------|----------|---------|-------------------------------------|
+| `daoId`  | `number` | -       | Required. The DAO to review.        |
+| `limit`  | `number` | 50      | Max rows to return (capped at 500)  |
+| `offset` | `number` | 0       | Pagination offset                   |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 1,
+  "attempts": [
+    {
+      "id": 7,
+      "dao_id": 1,
+      "type": "sbt_transfer_attempt",
+      "data": { "functionNames": ["transfer"], "successful": false },
+      "ledger": 123456,
+      "tx_hash": "abcd...",
+      "timestamp": "2026-08-30T00:00:00.000Z",
+      "verified": true
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+#### Errors
+
+- `400` - `daoId` is missing or not a positive integer
+- `401` - Missing/invalid auth token
 
 ---
 
@@ -1198,7 +1304,7 @@ Retrieve events from a specific historical archive.
 
 ### GET /events/:daoId
 
-Get indexed events for a DAO with pagination and optional type filtering.
+Get indexed events for a DAO with cursor-based pagination and optional type filtering.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
@@ -1213,24 +1319,34 @@ Get indexed events for a DAO with pagination and optional type filtering.
 
 | Parameter | Type     | Default | Description                                      |
 |-----------|----------|---------|--------------------------------------------------|
-| `limit`   | `string` | `"50"` | Max events to return (capped at 100)             |
-| `offset`  | `string` | `"0"`  | Number of events to skip                         |
+| `limit`   | `number` | `100`   | Max events per page (max `500`)               |
+| `cursor`  | `string` | none    | Opaque cursor for fetching next page        |
 | `types`   | `string` | none    | Comma-separated event type filter (e.g., `"vote_cast,proposal_created"`) |
 
 #### Example Request
 
 ```bash
+# First page
 curl "http://localhost:3001/events/0?limit=20&types=vote_cast,proposal_created"
+
+# Next page
+curl "http://localhost:3001/events/0?limit=20&cursor=eyJpIjoxMjN9"
 ```
 
 #### Response (200)
 
 ```json
 {
-  "events": [...],
-  "total": 42
+  "data": [...],
+  "pagination": {
+    "cursor": "eyJpIjoxMjN9",
+    "hasMore": true,
+    "total": 42
+  }
 }
 ```
+
+When `hasMore` is `false`, there are no additional pages. Pass the `cursor` value as the `cursor` query parameter to fetch the next page. The cursor is an opaque string encoding the last item's position.
 
 #### Error Responses
 
@@ -1240,7 +1356,7 @@ curl "http://localhost:3001/events/0?limit=20&types=vote_cast,proposal_created"
 
 ---
 
-### GET /indexer/status
+### GET /events/archived
 
 Get the current status of the event indexer.
 

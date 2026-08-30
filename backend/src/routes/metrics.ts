@@ -6,8 +6,23 @@
 
 import { Router, Request, Response } from "express";
 import { register } from "../services/metrics.js";
+import {
+  dbConnectionsActive,
+  dbWalSizeBytes,
+  dbReadLagMs,
+  dbWriteHealthy,
+  dbWriteFailoverTotal,
+} from "../services/metrics.js";
 import { rpcPoolManager } from "../services/stellar.js";
-import { getDbStatus } from "../services/db.js";
+import { getDbStatus, setDbMetricsSink } from "../services/db.js";
+
+setDbMetricsSink({
+  setConnectionsActive: (n) => dbConnectionsActive.set(n),
+  setWalSizeBytes: (n) => dbWalSizeBytes.set(n),
+  setReadLagMs: (n) => dbReadLagMs.set(n),
+  setWriteHealthy: (healthy) => dbWriteHealthy.set(healthy ? 1 : 0),
+  incWriteFailover: (result) => dbWriteFailoverTotal.inc({ result }),
+});
 
 const router = Router();
 
@@ -21,7 +36,9 @@ router.get("/metrics", async (_req: Request, res: Response) => {
     const poolMetrics = rpcPoolManager.getMetrics();
 
     // Use collect functions on existing metrics rather than registerMetric
-    const healthyEp = register.getSingleMetric("zkvote_rpc_pool_healthy_endpoints");
+    const healthyEp = register.getSingleMetric(
+      "zkvote_rpc_pool_healthy_endpoints",
+    );
     const totalEp = register.getSingleMetric("zkvote_rpc_pool_total_endpoints");
 
     if (healthyEp && "set" in healthyEp) {
@@ -31,15 +48,42 @@ router.get("/metrics", async (_req: Request, res: Response) => {
       (totalEp as any).set(poolMetrics.totalEndpoints);
     }
 
-    // Update DB WAL size
+    // Update DB gauges (WAL, lag, connections)
     try {
       const dbStatus = getDbStatus() as unknown as Record<string, unknown>;
       if (dbStatus && typeof dbStatus === "object") {
         const walSize = dbStatus.walSizeBytes;
         if (typeof walSize === "number") {
-          const walMetric = register.getSingleMetric("zkvote_db_wal_size_bytes");
+          const walMetric = register.getSingleMetric(
+            "zkvote_db_wal_size_bytes",
+          );
           if (walMetric && "set" in walMetric) {
             (walMetric as any).set(walSize);
+          }
+        }
+        const lag = dbStatus.readLagMs;
+        if (typeof lag === "number") {
+          const lagMetric = register.getSingleMetric("zkvote_db_read_lag_ms");
+          if (lagMetric && "set" in lagMetric) {
+            (lagMetric as any).set(lag);
+          }
+        }
+        const conns = dbStatus.connectionsActive;
+        if (typeof conns === "number") {
+          const connMetric = register.getSingleMetric(
+            "zkvote_db_connections_active",
+          );
+          if (connMetric && "set" in connMetric) {
+            (connMetric as any).set(conns);
+          }
+        }
+        const healthy = dbStatus.writeHealthy;
+        if (typeof healthy === "boolean") {
+          const healthyMetric = register.getSingleMetric(
+            "zkvote_db_write_healthy",
+          );
+          if (healthyMetric && "set" in healthyMetric) {
+            (healthyMetric as any).set(healthy ? 1 : 0);
           }
         }
       }

@@ -1,10 +1,10 @@
 /**
  * Database Worker Thread Pool
- * 
+ *
  * Implements a read/write separated worker pool:
  * - 1 Dedicated Writer Worker for SQLite write operations (WAL mode single writer)
  * - N Reader Workers for parallel read queries (round-robin dispatching)
- * 
+ *
  * Provides message-passing interface, worker crash recovery, auto-restart,
  * and pool performance metrics.
  */
@@ -176,7 +176,9 @@ export class DbWorkerPool {
         if (msg.success) {
           pending.resolve(msg.result);
         } else {
-          pending.reject(new Error(msg.error || "Worker query execution failed"));
+          pending.reject(
+            new Error(msg.error || "Worker query execution failed"),
+          );
         }
       }
     });
@@ -199,13 +201,19 @@ export class DbWorkerPool {
   /**
    * Handle worker crash with automatic restart
    */
-  private handleCrash(crashedWorker: Worker, isWriter: boolean, id: number): void {
+  private handleCrash(
+    crashedWorker: Worker,
+    isWriter: boolean,
+    id: number,
+  ): void {
     this.crashesCount++;
     this.restartsCount++;
 
     try {
       crashedWorker.terminate();
-    } catch (_) { /* noop */ }
+    } catch (_) {
+      // worker already dead; nothing to recover
+    }
 
     // Reject and remove any requests that were in flight on the crashed
     // worker — otherwise their promises (and the map entries holding them)
@@ -232,7 +240,10 @@ export class DbWorkerPool {
   /**
    * Execute write query on writer worker
    */
-  public async executeWrite(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+  public async executeWrite(
+    sql: string,
+    params: any[] = [],
+  ): Promise<{ changes: number; lastInsertRowid: number }> {
     if (!this.initialized || !this.writerWorker) {
       await this.init();
     }
@@ -252,7 +263,10 @@ export class DbWorkerPool {
   /**
    * Execute read query on reader worker pool (round-robin)
    */
-  public async queryRead<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+  public async queryRead<T = any>(
+    sql: string,
+    params: any[] = [],
+  ): Promise<T[]> {
     if (!this.initialized || this.readerWorkers.length === 0) {
       await this.init();
     }
@@ -264,7 +278,10 @@ export class DbWorkerPool {
   /**
    * Execute single-row read query on reader worker pool
    */
-  public async queryReadOne<T = any>(sql: string, params: any[] = []): Promise<T | undefined> {
+  public async queryReadOne<T = any>(
+    sql: string,
+    params: any[] = [],
+  ): Promise<T | undefined> {
     if (!this.initialized || this.readerWorkers.length === 0) {
       await this.init();
     }
@@ -276,7 +293,12 @@ export class DbWorkerPool {
   /**
    * Dispatch message to target worker thread
    */
-  private dispatch<T>(worker: Worker, type: string, sql: string, params: any[]): Promise<T> {
+  private dispatch<T>(
+    worker: Worker,
+    type: string,
+    sql: string,
+    params: any[],
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const reqId = `req_${++this.requestCounter}_${Date.now()}`;
       this.pendingRequests.set(reqId, {
@@ -303,7 +325,8 @@ export class DbWorkerPool {
       return this.writerWorker!;
     }
     const worker = this.readerWorkers[this.currentReaderIndex];
-    this.currentReaderIndex = (this.currentReaderIndex + 1) % this.readerWorkers.length;
+    this.currentReaderIndex =
+      (this.currentReaderIndex + 1) % this.readerWorkers.length;
     return worker;
   }
 
@@ -313,7 +336,9 @@ export class DbWorkerPool {
   public getMetrics(): WorkerPoolMetrics {
     const avgProcessingTimeMs =
       this.totalQueriesHandled > 0
-        ? Math.round((this.totalProcessingTimeMs / this.totalQueriesHandled) * 100) / 100
+        ? Math.round(
+            (this.totalProcessingTimeMs / this.totalQueriesHandled) * 100,
+          ) / 100
         : 0;
 
     return {

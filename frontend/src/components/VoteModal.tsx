@@ -1,15 +1,8 @@
 import { useState } from "react";
 import { Button } from "./ui/Button";
 import Alert from "./ui/Alert";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "./ui/Card";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { relayerFetch } from "../lib/api";
 import {
   generateVoteProof,
@@ -19,12 +12,14 @@ import {
 } from "../lib/zkproof";
 import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
+import { useOptimisticVote } from "../queries/proposalQueries";
 import {
   generateDeterministicZKCredentials,
   getZKCredentials,
   storeZKCredentials,
 } from "../lib/zk";
 import { CheckCircle, XCircle, AlertTriangle, Loader2, X } from "lucide-react";
+import { useReceipts } from "../hooks/useReceipts";
 
 interface VoteModalProps {
   proposalId: number;
@@ -54,6 +49,8 @@ export default function VoteModal({
   const [step, setStep] = useState<VoteStep>("select");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { addReceipt } = useReceipts();
+  const { setOptimisticVote, clearPendingVote } = useOptimisticVote();
 
   const handleVote = async (choice: boolean) => {
     setStep("generating");
@@ -61,11 +58,15 @@ export default function VoteModal({
 
     try {
       // Initialize contract clients
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Step 1: Load registration data (or regenerate from wallet)
       setProgress("Loading voting credentials...");
-      let secret: string, salt: string, commitment: string, leafIndex: number;
+      let secret: string,
+        salt: string,
+        blindingFactor: string,
+        commitment: string,
+        leafIndex: number;
 
       const cached = getZKCredentials(daoId, publicKey);
 
@@ -95,6 +96,7 @@ export default function VoteModal({
         leafIndex = Number(leafIndexResult.result);
         secret = credentials.secret;
         salt = credentials.salt;
+        blindingFactor = credentials.blindingFactor;
         commitment = credentials.commitment;
 
         // Cache for next time
@@ -104,6 +106,7 @@ export default function VoteModal({
       } else {
         secret = cached.secret;
         salt = cached.salt;
+        blindingFactor = cached.blindingFactor;
         commitment = cached.commitment;
         leafIndex = cached.leafIndex;
       }
@@ -177,6 +180,7 @@ export default function VoteModal({
         // Private signals
         secret: secret.toString(),
         salt: salt.toString(),
+        blindingFactor: blindingFactor.toString(),
         pathElements,
         pathIndices,
       };
@@ -223,53 +227,121 @@ export default function VoteModal({
         return bigInt.toString(16).padStart(64, "0");
       };
 
-      // Submit to relay server (provides anonymity by hiding voter's public key)
-      // Note: commitment is NOT sent - it's now a private circuit input for improved privacy
-      const response = await relayerFetch("/vote", {
+      const votePayload = {
+        daoId: Number(daoId),
+        proposalId: Number(proposalId),
+        choice: choice,
+        nullifier: toHexBE(nullifier),
+        root: toHexBE(root),
+        proof: {
+          a: proof_a,
+          b: proof_b,
+          c: proof_c,
+        },
+        timestamp: Date.now(),
+      };
+
+      // Sign the vote payload with the voter's Stellar keypair
+      let voterSignature: string | undefined;
+      try {
+        setProgress("Signing vote with your wallet...");
+        const { signVotePayload } = await import("../services/freighter");
+        const { getFreighterNetworkDetails } =
+          await import("../services/freighter");
+        const networkDetails = await getFreighterNetworkDetails();
+        const networkPassphrase =
+          networkDetails?.networkPassphrase ||
+          "Public Global Stellar Network ; September 2015";
+
+        const payloadToSign = JSON.stringify(votePayload);
+        voterSignature = await signVotePayload(
+          payloadToSign,
+          publicKey,
+          networkPassphrase,
+        );
+
+        if (import.meta.env.DEV) {
+          console.log("Vote payload signed:", {
+            signature: voterSignature.slice(0, 16) + "...",
+          });
+        }
+      } catch (err) {
+        console.warn("Failed to sign vote payload:", err);
+        // Continue without signature - backend will still accept it with relayer auth token
+      }
+
+      const requestBody = JSON.stringify({
+        ...votePayload,
+        voterPublicKey: publicKey,
+        voterSignature,
+      });
+
+      // Optimistic update
+      const revertOptimisticUpdate = setOptimisticVote(
+        daoId,
+        proposalId,
+        choice,
+      );
+
+      // Close the modal immediately to show optimistic UI state
+      setStep("success");
+      onComplete();
+
+      // Submit to relay server asynchronously in background
+      relayerFetch("/vote", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          daoId: Number(daoId),
-          proposalId: Number(proposalId),
-          choice: choice,
-          nullifier: toHexBE(nullifier),
-          root: toHexBE(root),
-          proof: {
-            a: proof_a,
-            b: proof_b,
-            c: proof_c,
-          },
-        }),
-      });
+        body: requestBody,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const errorData = await response.json();
+            const errorMsg = parseApiError(errorData);
+            const errorCode = getApiErrorCode(errorData);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        const errorMsg =
-          errorData.error || "Failed to submit vote through relay";
+            // Detect double-vote error
+            if (
+              errorCode === ErrorCode.VOTE_ALREADY_CAST ||
+              errorMsg.includes("already voted") ||
+              errorMsg.includes("UnreachableCodeReached")
+            ) {
+              alert(
+                "You have already voted on this proposal. Each member can only vote once per proposal.",
+              );
+            } else {
+              alert(errorMsg);
+            }
+            revertOptimisticUpdate();
+            return;
+          }
 
-        // Detect double-vote error
-        if (
-          errorMsg.includes("already voted") ||
-          errorMsg.includes("UnreachableCodeReached")
-        ) {
-          throw new Error(
-            "You have already voted on this proposal. Each member can only vote once per proposal.",
+          const result = await response.json();
+          if (import.meta.env.DEV)
+            console.log("Vote submitted successfully:", result);
+
+          // Save receipt
+          if (result.txHash) {
+            addReceipt({
+              txHash: result.txHash,
+              nullifier: toHexBE(nullifier),
+              timestamp: Date.now(),
+              daoId: Number(daoId),
+              proposalId: Number(proposalId),
+            });
+          }
+
+          clearPendingVote(daoId, proposalId);
+        })
+        .catch((err) => {
+          console.error("Vote submission background failure:", err);
+          alert(
+            "Background vote submission failed: " +
+              (err instanceof Error ? err.message : "Network error"),
           );
-        }
-
-        throw new Error(errorMsg);
-      }
-
-      const result = await response.json();
-      if (import.meta.env.DEV)
-        console.log("Vote submitted successfully:", result);
-
-      setStep("success");
-      setTimeout(() => {
-        onComplete();
-      }, 2000);
+          revertOptimisticUpdate();
+        });
     } catch (err) {
       setStep("error");
       let errorMsg =
@@ -300,25 +372,34 @@ export default function VoteModal({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vote-modal-title"
         className="relative w-[calc(100%-2rem)] max-w-lg max-h-[85dvh] flex flex-col overflow-hidden bg-card border border-border rounded-xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header with inline close button */}
         <div className="flex items-start justify-between p-4 sm:p-6 border-b border-border/60 shrink-0">
           <div>
-            <h3 className="text-xl font-bold tracking-tight text-foreground">Cast Anonymous Vote</h3>
+            <h3
+              id="vote-modal-title"
+              className="text-xl font-bold tracking-tight text-foreground"
+            >
+              Cast Anonymous Vote
+            </h3>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-              Your vote will be verified using zero-knowledge proofs to ensure anonymity while proving membership.
+              Your vote will be verified using zero-knowledge proofs to ensure
+              anonymity while proving membership.
             </p>
           </div>
           <Button
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close voting dialog"
             className="h-10 w-10 min-h-[48px] min-w-[48px] sm:h-8 sm:w-8 sm:min-h-0 sm:min-w-0 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 ml-2"
           >
-            <X className="h-5 w-5" />
-            <span className="sr-only">Close</span>
+            <X className="h-5 w-5" aria-hidden="true" />
           </Button>
         </div>
 
@@ -336,10 +417,15 @@ export default function VoteModal({
                 </Alert>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <div
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2"
+                role="group"
+                aria-label="Vote options"
+              >
                 <Button
                   onClick={() => handleVote(true)}
                   variant="outline"
+                  aria-label="Vote yes on this proposal"
                   className="min-h-[48px] text-base font-semibold border-green-500/40 text-green-600 dark:text-green-400 hover:bg-green-500/10"
                 >
                   Vote Yes
@@ -347,33 +433,12 @@ export default function VoteModal({
                 <Button
                   onClick={() => handleVote(false)}
                   variant="outline"
+                  aria-label="Vote no on this proposal"
                   className="min-h-[48px] text-base font-semibold border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
                 >
                   Vote No
                 </Button>
               </div>
-                  </Alert>
-                )}
-
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <Button
-                    onClick={() => handleVote(true)}
-                    disabled={step !== "select"}
-                    variant="outline"
-                    className="h-12 text-lg"
-                  >
-                    Vote Yes
-                  </Button>
-                  <Button
-                    onClick={() => handleVote(false)}
-                    disabled={step !== "select"}
-                    variant="outline"
-                    className="h-12 text-lg"
-                  >
-                    Vote No
-                  </Button>
-                </div>
-              </CardContent>
             </>
           )}
 
@@ -391,7 +456,11 @@ export default function VoteModal({
                     ? "Generating Proof"
                     : "Submitting Vote"}
                 </h3>
-                <p className="text-sm text-muted-foreground max-w-[260px] mx-auto break-words">
+                <p
+                  className="text-sm text-muted-foreground max-w-[260px] mx-auto break-words"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
                   {progress}
                 </p>
               </div>
@@ -405,9 +474,16 @@ export default function VoteModal({
           )}
 
           {step === "success" && (
-            <div className="py-8 flex flex-col items-center text-center space-y-4">
+            <div
+              className="py-8 flex flex-col items-center text-center space-y-4"
+              aria-live="assertive"
+              aria-atomic="true"
+            >
               <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-2">
-                <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
+                <CheckCircle
+                  className="h-8 w-8 text-green-600 dark:text-green-400"
+                  aria-hidden="true"
+                />
               </div>
               <div className="space-y-1">
                 <h3 className="font-bold text-xl">Vote Submitted!</h3>

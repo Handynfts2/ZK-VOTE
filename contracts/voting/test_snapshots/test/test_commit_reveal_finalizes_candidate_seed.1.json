@@ -521,6 +521,28 @@
                   },
                   {
                     "key": {
+                      "symbol": "commitment_window"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "max_revotes"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "merkle_root_set_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "min_balance"
                     },
                     "val": {
@@ -550,6 +572,20 @@
                     "val": {
                       "u64": "0"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "vdf_delay"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "vdf_output"
+                    },
+                    "val": "void"
                   }
                 ]
               }
@@ -1160,6 +1196,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "stor_ver"
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     },
                     {

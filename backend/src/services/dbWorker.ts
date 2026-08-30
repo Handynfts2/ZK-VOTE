@@ -1,6 +1,6 @@
 /**
  * Database Worker Thread Execution Handler
- * 
+ *
  * Runs SQLite queries in isolated worker threads using better-sqlite3.
  * Listens for query messages from the main thread and responds with execution results.
  */

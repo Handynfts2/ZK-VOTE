@@ -100,7 +100,12 @@ export function useWallet() {
       });
 
       unlistenNetwork = listenToNetworkChange((net) => {
-        if (net && !NETWORK_CONFIG.networkPassphrase.toLowerCase().includes(net.toLowerCase())) {
+        if (
+          net &&
+          !NETWORK_CONFIG.networkPassphrase
+            .toLowerCase()
+            .includes(net.toLowerCase())
+        ) {
           setWallet((prev) => ({
             ...prev,
             networkWarning: `Wallet network is set to "${net}", but app expects target network. Please switch networks in wallet.`,

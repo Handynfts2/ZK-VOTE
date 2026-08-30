@@ -13,7 +13,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+export NODE_PATH="$PROJECT_ROOT/frontend/node_modules"
 
 echo "============================================"
 echo "Poseidon KAT End-to-End Verification"
@@ -52,7 +53,7 @@ NETWORK_PASSPHRASE="Standalone Network ; February 2017"
 # Step 2: Create and fund test key
 echo "Step 2: Creating test account..."
 KEY_NAME="kat-test-$(date +%s)"
-stellar keys generate "$KEY_NAME" --no-fund 2>/dev/null || true
+stellar keys generate "$KEY_NAME" 2>/dev/null || true
 PUBKEY=$(stellar keys address "$KEY_NAME")
 echo "  Public key: $PUBKEY"
 
@@ -84,7 +85,7 @@ echo "  MembershipSBT: $SBT_ID"
 TREE_ID=$(stellar contract deploy \
   --wasm target/wasm32v1-none/release/membership_tree.wasm \
   --source "$KEY_NAME" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
-  -- --sbt_contract "$SBT_ID" 2>&1 | tail -1)
+  -- --sbt_contract "$SBT_ID" --registry "$REGISTRY_ID" 2>&1 | tail -1)
 echo "  MembershipTree: $TREE_ID"
 echo ""
 
@@ -112,9 +113,9 @@ stellar contract invoke \
   --network-passphrase "$NETWORK_PASSPHRASE" \
   -- init_tree \
   --dao_id "$DAO_ID" \
-  --depth 20 \
+  --depth 18 \
   --admin "$PUBKEY" 2>&1 | tail -3
-echo "  Tree initialized with depth 20."
+echo "  Tree initialized with depth 18."
 echo ""
 
 # Step 8: Mint SBT for test member
@@ -134,8 +135,8 @@ echo ""
 # Step 9: Register known commitment
 echo "Step 8: Registering test commitment..."
 # From circomlib: Poseidon(12345, 67890) = 0x1914879b2a4e7f9555f3eb55837243cefb1366a692794a7e5b5b3181fb14b49b
-# As U256 JSON:
-COMMITMENT_JSON='{"hi_hi":1806915879155105685,"hi_lo":6191291063665763278,"lo_hi":18095619929817262718,"lo_lo":6581073628349498523}'
+# Passed to the contract as a single u256 decimal integer.
+COMMITMENT_DEC=$(node -e "console.log(BigInt('0x1914879b2a4e7f9555f3eb55837243cefb1366a692794a7e5b5b3181fb14b49b').toString())")
 
 stellar contract invoke \
   --id "$TREE_ID" \
@@ -144,7 +145,7 @@ stellar contract invoke \
   --network-passphrase "$NETWORK_PASSPHRASE" \
   -- register_with_caller \
   --dao_id "$DAO_ID" \
-  --commitment "$COMMITMENT_JSON" \
+  --commitment "$COMMITMENT_DEC" \
   --caller "$PUBKEY" 2>&1 | tail -3
 echo "  Commitment registered."
 echo ""
@@ -163,14 +164,51 @@ echo ""
 
 # Step 11: Compare with expected
 echo "Step 10: Comparing with circomlib expected value..."
-# Expected from circomlib: 0x2d8b784789ca06c6bb30d7593b0774a6124aff26581f04b9125d1be25e46545d
-# As U256 JSON:
-EXPECTED_ROOT='{"hi_hi":3286161620916250310,"hi_lo":13489905787044537510,"lo_hi":1319043788869878969,"lo_lo":1327085652556297309}'
-echo "  Expected root (from circomlib): $EXPECTED_ROOT"
+# Expected root: Merkle root of a single-leaf (Poseidon(12345,67890)) tree at
+# depth 18, computed with circomlib Poseidon — the same library the circuit uses.
+# The P25 host function must produce an identical root for the KAT to pass.
+EXPECTED_ROOT_DEC=$(node -e "
+const { buildPoseidon } = require('circomlibjs');
+(async () => {
+  const poseidon = await buildPoseidon();
+  const F = poseidon.F;
+  // Use the plain-array / F.zero API (matches circuits/utils/poseidon_kat.js).
+  const leaf = poseidon([12345n, 67890n]);
+  const zh = [F.zero];
+  for (let i = 0; i < 18; i++) { zh.push(poseidon([zh[i], zh[i]])); }
+  let node = leaf;
+  for (let l = 0; l < 18; l++) { node = poseidon([node, zh[l]]); }
+  console.log(F.toString(node));
+})();
+")
+echo "  Expected root (from circomlib): $EXPECTED_ROOT_DEC"
 echo ""
 
-# Parse and compare
-if [ "$ACTUAL_ROOT" = "$EXPECTED_ROOT" ]; then
+# Step 10b: Rust prover Poseidon KAT (must match circomlib for the same vector)
+# The zkvote-prover Rust Poseidon must agree with circomlib on the on-chain
+# commitment Poseidon(12345, 67890) = 0x1914879b... (see poseidon_commitment_12345_67890).
+echo "Step 10b: Verifying Rust zkvote-prover Poseidon matches circomlib..."
+if (cd "$PROJECT_ROOT" && cargo test -q -p zkvote-prover poseidon_commitment_12345_67890 > /tmp/rust_poseidon_kat.log 2>&1); then
+    if grep -qE "1 passed" /tmp/rust_poseidon_kat.log; then
+        echo "  ✅ Rust Poseidon matches circomlib for Poseidon(12345, 67890)"
+    else
+        echo "  ❌ Rust Poseidon KAT: test did not execute (filter mismatch)"
+        cat /tmp/rust_poseidon_kat.log
+        exit 1
+    fi
+else
+    echo "  ❌ Rust Poseidon KAT FAILED: zkvote-prover Poseidon disagrees with circomlib"
+    cat /tmp/rust_poseidon_kat.log
+    exit 1
+fi
+echo ""
+
+# Parse and compare (normalize both sides to a decimal u256)
+ACTUAL_ROOT_CLEAN=$(echo "$ACTUAL_ROOT" | tr -d '"' | tr -d ' ')
+if [[ "$ACTUAL_ROOT_CLEAN" == 0x* ]]; then
+  ACTUAL_ROOT_CLEAN=$(node -e "console.log(BigInt('$ACTUAL_ROOT_CLEAN').toString())")
+fi
+if [ "$ACTUAL_ROOT_CLEAN" = "$EXPECTED_ROOT_DEC" ]; then
     echo "============================================"
     echo "✅ SUCCESS: Poseidon KAT PASSED!"
     echo "============================================"

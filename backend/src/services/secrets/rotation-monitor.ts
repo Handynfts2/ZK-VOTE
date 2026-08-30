@@ -14,7 +14,7 @@ const logger = createLogger("rotation-monitor");
 /**
  * Default rotation intervals per secret type (in milliseconds)
  */
-const DEFAULT_ROTATION_INTERVALS: Record<string, number> = {
+export const DEFAULT_ROTATION_INTERVALS: Record<string, number> = {
   RELAYER_SECRET_KEY: 30 * 24 * 60 * 60 * 1000, // 30 days
   RELAYER_AUTH_TOKEN: 7 * 24 * 60 * 60 * 1000, // 7 days
   PINATA_JWT: 30 * 24 * 60 * 60 * 1000, // 30 days
@@ -27,9 +27,16 @@ export function checkRotationStatus(
   key: string,
   metadata: SecretMetadata | undefined,
 ): RotationStatus {
-  const interval = metadata?.rotationIntervalMs ?? DEFAULT_ROTATION_INTERVALS[key] ?? 30 * 24 * 60 * 60 * 1000;
-  const lastRotated = metadata?.lastRotatedAt ? new Date(metadata.lastRotatedAt).getTime() : null;
-  const expiresAt = metadata?.expiresAt ? new Date(metadata.expiresAt).getTime() : null;
+  const interval =
+    metadata?.rotationIntervalMs ??
+    DEFAULT_ROTATION_INTERVALS[key] ??
+    30 * 24 * 60 * 60 * 1000;
+  const lastRotated = metadata?.lastRotatedAt
+    ? new Date(metadata.lastRotatedAt).getTime()
+    : null;
+  const expiresAt = metadata?.expiresAt
+    ? new Date(metadata.expiresAt).getTime()
+    : null;
   const now = Date.now();
 
   let nextRotationAt: string | null = null;
@@ -48,7 +55,10 @@ export function checkRotationStatus(
     status = "overdue";
   } else if (expiresAt !== null && now > expiresAt - 7 * 24 * 60 * 60 * 1000) {
     status = "expiring-soon";
-  } else if (lastRotated !== null && now > lastRotated + interval - 7 * 24 * 60 * 60 * 1000) {
+  } else if (
+    lastRotated !== null &&
+    now > lastRotated + interval - 7 * 24 * 60 * 60 * 1000
+  ) {
     status = "expiring-soon";
   } else if (lastRotated === null) {
     status = "unknown";
@@ -80,11 +90,17 @@ export function checkAllRotations(
 /**
  * Get overall health based on rotation statuses
  */
-export function getOverallHealth(rotationStatuses: RotationStatus[]): "healthy" | "degraded" | "critical" {
+export function getOverallHealth(
+  rotationStatuses: RotationStatus[],
+): "healthy" | "degraded" | "critical" {
   if (rotationStatuses.some((s) => s.status === "overdue")) {
     return "critical";
   }
-  if (rotationStatuses.some((s) => s.status === "expiring-soon" || s.status === "unknown")) {
+  if (
+    rotationStatuses.some(
+      (s) => s.status === "expiring-soon" || s.status === "unknown",
+    )
+  ) {
     return "degraded";
   }
   return "healthy";

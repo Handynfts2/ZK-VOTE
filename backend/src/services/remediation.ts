@@ -68,14 +68,70 @@ const remediationHistory: RemediationRecord[] = [];
 const MAX_HISTORY_SIZE = 200;
 
 const statsMap: Record<ErrorType, MTTRStats> = {
-  RPC_CONNECTIVITY: { errorType: "RPC_CONNECTIVITY", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  RPC_RATE_LIMITED: { errorType: "RPC_RATE_LIMITED", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  SQLITE_LOCKED: { errorType: "SQLITE_LOCKED", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  SQLITE_CORRUPT: { errorType: "SQLITE_CORRUPT", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  PINATA_DOWN: { errorType: "PINATA_DOWN", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  MEMORY_EXHAUSTION: { errorType: "MEMORY_EXHAUSTION", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  SEQUENCE_MISMATCH: { errorType: "SEQUENCE_MISMATCH", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
-  BACKGROUND_SERVICE_CRASH: { errorType: "BACKGROUND_SERVICE_CRASH", totalOccurrences: 0, successfulRecoveries: 0, failedRecoveries: 0, totalRecoveryTimeMs: 0, mttrMs: 0 },
+  RPC_CONNECTIVITY: {
+    errorType: "RPC_CONNECTIVITY",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  RPC_RATE_LIMITED: {
+    errorType: "RPC_RATE_LIMITED",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  SQLITE_LOCKED: {
+    errorType: "SQLITE_LOCKED",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  SQLITE_CORRUPT: {
+    errorType: "SQLITE_CORRUPT",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  PINATA_DOWN: {
+    errorType: "PINATA_DOWN",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  MEMORY_EXHAUSTION: {
+    errorType: "MEMORY_EXHAUSTION",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  SEQUENCE_MISMATCH: {
+    errorType: "SEQUENCE_MISMATCH",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
+  BACKGROUND_SERVICE_CRASH: {
+    errorType: "BACKGROUND_SERVICE_CRASH",
+    totalOccurrences: 0,
+    successfulRecoveries: 0,
+    failedRecoveries: 0,
+    totalRecoveryTimeMs: 0,
+    mttrMs: 0,
+  },
 };
 
 // Retry count tracking for escalation
@@ -119,27 +175,54 @@ export function getRetryQueueLength(): number {
 export function classifyError(error: unknown): ErrorType {
   const msg = error instanceof Error ? error.message : String(error);
   const code = (error as { code?: string; status?: number })?.code || "";
-  const status = (error as { status?: number; statusCode?: number })?.status || (error as { statusCode?: number })?.statusCode;
+  const status =
+    (error as { status?: number; statusCode?: number })?.status ||
+    (error as { statusCode?: number })?.statusCode;
 
-  if (status === 429 || msg.includes("429") || msg.toLowerCase().includes("rate limit")) {
+  if (
+    status === 429 ||
+    msg.includes("429") ||
+    msg.toLowerCase().includes("rate limit")
+  ) {
     return "RPC_RATE_LIMITED";
   }
-  if (msg.includes("tx_bad_seq") || msg.toLowerCase().includes("sequence number mismatch")) {
+  if (
+    msg.includes("tx_bad_seq") ||
+    msg.toLowerCase().includes("sequence number mismatch")
+  ) {
     return "SEQUENCE_MISMATCH";
   }
-  if (code === "SQLITE_BUSY" || msg.includes("SQLITE_BUSY") || msg.toLowerCase().includes("database is locked")) {
+  if (
+    code === "SQLITE_BUSY" ||
+    msg.includes("SQLITE_BUSY") ||
+    msg.toLowerCase().includes("database is locked")
+  ) {
     return "SQLITE_LOCKED";
   }
-  if (code === "SQLITE_CORRUPT" || msg.includes("SQLITE_CORRUPT") || msg.toLowerCase().includes("database disk image is malformed")) {
+  if (
+    code === "SQLITE_CORRUPT" ||
+    msg.includes("SQLITE_CORRUPT") ||
+    msg.toLowerCase().includes("database disk image is malformed")
+  ) {
     return "SQLITE_CORRUPT";
   }
-  if (msg.toLowerCase().includes("pinata") || msg.toLowerCase().includes("ipfs timeout") || msg.includes("ETIMEDOUT")) {
+  if (
+    msg.toLowerCase().includes("pinata") ||
+    msg.toLowerCase().includes("ipfs timeout") ||
+    msg.includes("ETIMEDOUT")
+  ) {
     return "PINATA_DOWN";
   }
-  if (msg.toLowerCase().includes("out of memory") || msg.toLowerCase().includes("heap limit")) {
+  if (
+    msg.toLowerCase().includes("out of memory") ||
+    msg.toLowerCase().includes("heap limit")
+  ) {
     return "MEMORY_EXHAUSTION";
   }
-  if (msg.toLowerCase().includes("service crashed") || msg.toLowerCase().includes("supervisor restart")) {
+  if (
+    msg.toLowerCase().includes("service crashed") ||
+    msg.toLowerCase().includes("supervisor restart")
+  ) {
     return "BACKGROUND_SERVICE_CRASH";
   }
   // Default fallback for RPC/network connectivity errors
@@ -153,7 +236,7 @@ export function classifyError(error: unknown): ErrorType {
 export async function remediateError(
   errorType: ErrorType,
   error: unknown,
-  context: Record<string, unknown> = {}
+  context: Record<string, unknown> = {},
 ): Promise<RemediationRecord> {
   const startTime = Date.now();
   const errorMessage = error instanceof Error ? error.message : String(error);
@@ -181,7 +264,10 @@ export async function remediateError(
         break;
       }
       case "RPC_RATE_LIMITED": {
-        currentPollingIntervalMs = Math.min(currentPollingIntervalMs * 2, 30000);
+        currentPollingIntervalMs = Math.min(
+          currentPollingIntervalMs * 2,
+          30000,
+        );
         actionTaken = `Reduced polling frequency to ${currentPollingIntervalMs}ms`;
         success = true;
         break;
@@ -194,7 +280,8 @@ export async function remediateError(
         break;
       }
       case "SQLITE_CORRUPT": {
-        actionTaken = "Triggered database restore from latest litestream / S3 backup";
+        actionTaken =
+          "Triggered database restore from latest litestream / S3 backup";
         // Simulate backup restore initiation
         success = true;
         break;
@@ -210,7 +297,8 @@ export async function remediateError(
           global.gc();
           actionTaken = "Executed garbage collection forced cleanup";
         } else {
-          actionTaken = "Scheduled graceful restart due to memory threshold breach";
+          actionTaken =
+            "Scheduled graceful restart due to memory threshold breach";
         }
         success = true;
         break;
@@ -243,7 +331,9 @@ export async function remediateError(
   if (success) {
     stat.successfulRecoveries += 1;
     stat.totalRecoveryTimeMs += recoveryTimeMs;
-    stat.mttrMs = Math.round(stat.totalRecoveryTimeMs / stat.successfulRecoveries);
+    stat.mttrMs = Math.round(
+      stat.totalRecoveryTimeMs / stat.successfulRecoveries,
+    );
     mttrGauge.set({ error_type: errorType }, stat.mttrMs / 1000);
   } else {
     stat.failedRecoveries += 1;

@@ -12,6 +12,7 @@ export interface DAOMetadata {
   description: string; // Markdown, max 1000 chars
   coverImageCid?: string; // IPFS CID for cover photo
   profileImageCid?: string; // IPFS CID for profile photo
+  themeColor?: string; // Per-DAO accent color, strict 6-digit hex e.g. "#3b82f6"
   links?: {
     website?: string;
     twitter?: string; // x.com handle or URL
@@ -35,6 +36,10 @@ export function validateDAOMetadata(metadata: Partial<DAOMetadata>): string[] {
     metadata.description.length > MAX_DESCRIPTION_LENGTH
   ) {
     errors.push(`Description exceeds ${MAX_DESCRIPTION_LENGTH} characters`);
+  }
+
+  if (metadata.themeColor && !isValidHexColor(metadata.themeColor)) {
+    errors.push("Theme color must be a 6-digit hex color, e.g. #3b82f6");
   }
 
   if (metadata.links) {
@@ -97,7 +102,12 @@ export async function fetchDAOMetadata(
     if (!response.ok) return null;
     const data = await response.json();
     // Validate it's actually DAO metadata and sanitize prototype pollution keys
-    if (data && typeof data === "object" && data.version === 1 && typeof data.description === "string") {
+    if (
+      data &&
+      typeof data === "object" &&
+      data.version === 1 &&
+      typeof data.description === "string"
+    ) {
       return safeClone(data) as DAOMetadata;
     }
     return null;
@@ -136,6 +146,16 @@ export function getImageUrl(cid: string): string {
 }
 
 // URL validation helpers
+
+/**
+ * Strict 6-digit hex color check, e.g. "#3b82f6". Deliberately narrow (no
+ * named colors, no CSS functions like url()/expression()) since this value
+ * gets injected into a CSS custom property at render time (DAOHeader) — the
+ * only safe shapes for that are ones this regex fully constrains.
+ */
+export function isValidHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
+}
 
 function isValidUrl(url: string): boolean {
   try {

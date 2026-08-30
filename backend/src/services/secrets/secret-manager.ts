@@ -10,10 +10,18 @@
  * Secrets are fetched dynamically at runtime, not cached at startup.
  */
 
-import type { VaultConfig, SecretBackend, SecretManagerOptions } from "./types.js";
+import type {
+  VaultConfig,
+  SecretBackend,
+  SecretManagerOptions,
+} from "./types.js";
 import { encrypt, isEncrypted, generateMasterKey } from "./encryptor.js";
 import { auditLog, createAuditEntry } from "./audit-logger.js";
-import { checkRotationStatus, getOverallHealth } from "./rotation-monitor.js";
+import {
+  checkRotationStatus,
+  getOverallHealth,
+  DEFAULT_ROTATION_INTERVALS,
+} from "./rotation-monitor.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
 
@@ -24,10 +32,13 @@ import crypto from "node:crypto";
 let vaultConfig: VaultConfig | undefined;
 let encryptionKey: string;
 let backend: SecretBackend = "env";
-const rotationMetadata: Record<string, { metadata: import("./types.js").SecretMetadata | undefined }> = {};
+const rotationMetadata: Record<
+  string,
+  { metadata: import("./types.js").SecretMetadata | undefined }
+> = {};
 
 // Track in-flight fetches to avoid duplicate requests
-const pendingFetches: Map<string, Promise<string>> = new Map();
+const pendingFetches: Map<string, Promise<string | undefined>> = new Map();
 
 // ============================================
 // INITIALIZATION
@@ -186,7 +197,14 @@ export async function getSecret(
   } catch (err) {
     pendingFetches.delete(key);
     auditLog(
-      createAuditEntry(key, "get", false, requestId, options?.source, (err as Error).message),
+      createAuditEntry(
+        key,
+        "get",
+        false,
+        requestId,
+        options?.source,
+        (err as Error).message,
+      ),
     );
     return undefined;
   } finally {
@@ -213,7 +231,10 @@ async function fetchSecretValue(key: string): Promise<string | undefined> {
   // Fallback to environment variables (Fly.io secrets or .env)
   const envValue = process.env[key];
   if (envValue) {
-    backend = key.startsWith("FLY_SECRET_") || key.includes("FLY") ? "fly-secrets" : "env";
+    backend =
+      key.startsWith("FLY_SECRET_") || key.includes("FLY")
+        ? "fly-secrets"
+        : "env";
     return envValue;
   }
 
@@ -231,7 +252,10 @@ async function fetchSecretValue(key: string): Promise<string | undefined> {
 export async function setSecret(
   key: string,
   value: string,
-  options?: { metadata?: import("./types.js").SecretMetadata; requestId?: string },
+  options?: {
+    metadata?: import("./types.js").SecretMetadata;
+    requestId?: string;
+  },
 ): Promise<boolean> {
   // Encrypt the value at rest
   const storedValue = encrypt(value, encryptionKey);
@@ -239,7 +263,14 @@ export async function setSecret(
   if (vaultConfig) {
     const success = await storeInVault(key, storedValue);
     auditLog(
-      createAuditEntry(key, "set", success, options?.requestId, "vault", success ? undefined : "store_failed"),
+      createAuditEntry(
+        key,
+        "set",
+        success,
+        options?.requestId,
+        "vault",
+        success ? undefined : "store_failed",
+      ),
     );
 
     // Store metadata for rotation tracking
@@ -252,9 +283,7 @@ export async function setSecret(
 
   // Fallback: store in env (this is a process-level env var, not persistent)
   process.env[key] = storedValue;
-  auditLog(
-    createAuditEntry(key, "set", true, options?.requestId, "env"),
-  );
+  auditLog(createAuditEntry(key, "set", true, options?.requestId, "env"));
 
   if (options?.metadata) {
     rotationMetadata[key] = { metadata: options.metadata };
@@ -270,7 +299,9 @@ export async function setSecret(
 /**
  * Check the rotation status of all tracked secrets
  */
-export async function checkRotationHealth(): Promise<import("./types.js").SecretHealth> {
+export async function checkRotationHealth(): Promise<
+  import("./types.js").SecretHealth
+> {
   const statuses: import("./types.js").RotationStatus[] = [];
 
   for (const [key, entry] of Object.entries(rotationMetadata)) {
@@ -286,7 +317,7 @@ export async function checkRotationHealth(): Promise<import("./types.js").Secret
       const value = process.env[key];
       if (value) {
         const meta = isEncrypted(value)
-          ? { rotationIntervalMs: DEFAULT_ROTATION_INTERVALS[key] }
+          ? { key, rotationIntervalMs: DEFAULT_ROTATION_INTERVALS[key] }
           : undefined;
         if (meta) {
           rotationMetadata[key] = { metadata: meta };

@@ -1,0 +1,48 @@
+[package]
+name = "zkvote-prover"
+version = "0.1.0"
+edition = "2021"
+description = "Rust BN254 Groth16 prover + circomlib-compatible Poseidon for ZKVote (WASM-ready)"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+num-bigint = { workspace = true }
+num-traits = "0.2"
+ark-bn254 = "0.4.0"
+ark-ec = "0.4.2"
+ark-ff = "0.4.2"
+ark-std = "0.4.0"
+serde_json = "1"
+
+# WASM bindings (only enabled with the `wasm` feature so the host/contract build is unaffected)
+wasm-bindgen = { version = "0.2", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+js-sys = { version = "0.3", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+
+# Native witness generation: runs a compiled Circom2 witness-calculator WASM.
+wasmtime = { version = "21", optional = true }
+
+[features]
+default = []
+# Enables the browser/WASM API. Should NOT be enabled when building for soroban (wasm32v1-none).
+wasm = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen", "dep:js-sys", "dep:console_error_panic_hook", "dep:getrandom"]
+# Enables Rust witness generation (runs the circuit's compiled WASM in wasmtime).
+witness = ["dep:wasmtime", "dep:getrandom"]
+
+[[bin]]
+name = "zkprove"
+path = "src/bin/zkprove.rs"
+required-features = ["witness"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false
+
+[dev-dependencies]
+ark-std = "0.4.0"

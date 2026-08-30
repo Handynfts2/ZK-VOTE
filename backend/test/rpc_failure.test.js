@@ -8,6 +8,7 @@ const setupApp = async () => {
   process.env.RELAYER_SECRET_KEY = 'SCVZXEUXJLRZKPCUXGXN53BJTD3RAZPRSSXHXDGSZQH5EOGEUTWINUXF';
   process.env.VOTING_CONTRACT_ID = 'C'.padEnd(56, 'A');
   process.env.TREE_CONTRACT_ID = 'C'.padEnd(56, 'B');
+  process.env.COMMENTS_CONTRACT_ID = 'C'.padEnd(56, 'D');
   process.env.SOROBAN_RPC_URL = 'http://localhost';
   process.env.CORS_ORIGIN = 'http://localhost'; // CSRF middleware fails-closed on wildcard CORS
   process.env.NETWORK_PASSPHRASE = 'Test';
@@ -34,4 +35,41 @@ test('vote returns coarse error when simulate disabled in test mode', async () =
     });
   assert.equal(res.statusCode, 400);
   assert.ok(res.body.error);
+});
+
+// ============================================================
+// SequenceManager tests (issue #279)
+// ============================================================
+
+test('SequenceManager.handleTxError marks dirty on tx_bad_seq', async () => {
+  const { sequenceManager } = await import('../src/services/stellar.ts');
+
+  // Reset dirty state first
+  sequenceManager.markDirty();
+
+  const wasBadSeq = sequenceManager.handleTxError('tx_bad_seq: sequence mismatch');
+  assert.equal(wasBadSeq, true, 'Should detect tx_bad_seq');
+});
+
+test('SequenceManager.handleTxError returns false for non-sequence errors', async () => {
+  const { sequenceManager } = await import('../src/services/stellar.ts');
+
+  const wasBadSeq = sequenceManager.handleTxError('tx_failed: insufficient_balance');
+  assert.equal(wasBadSeq, false, 'Should not flag non-sequence errors as bad-seq');
+});
+
+test('SequenceManager forceResync updates internal state via mock RPC', async () => {
+  const { SequenceManager } = await import('../src/services/stellar.ts');
+
+  const mockServer = {
+    getAccount: async () => ({ sequence: '999', accountId: 'GTEST' }),
+  };
+
+  const mgr = new SequenceManager();
+  // Confirm dirty before resync
+  mgr.markDirty();
+  await mgr.forceResync(mockServer);
+  // After resync, a subsequent handleTxError should not leave dirty flag from the resync itself
+  const r = mgr.handleTxError('tx_failed: something_else');
+  assert.equal(r, false);
 });

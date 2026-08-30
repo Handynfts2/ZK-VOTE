@@ -7,10 +7,9 @@ include "merkle_tree.circom";
 // DaoVote Anonymous Vote Circuit v2
 //
 // Adds chainId as a public signal to prevent cross-chain replay attacks.
-// Adds numCandidates as a public signal to bind the election's candidate count
-// into the ZK proof, preventing circuit/contract candidate bound desync.
+// Upgraded from v1 which had 5 public signals.
 //
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId]
+// Public signals: [root, nullifier, daoId, proposalId, voteChoice, chainId]
 // Private signals: secret, salt, pathElements, pathIndices
 //
 // chainId prevents replay attacks: a proof generated for one chain
@@ -21,8 +20,7 @@ template VoteV2(levels) {
     signal input nullifier;         // Prevents double voting (domain-separated)
     signal input daoId;             // DAO identifier (for domain separation)
     signal input proposalId;        // Which proposal this vote is for
-    signal input voteChoice;        // Candidate index the voter selected
-    signal input numCandidates;     // Total number of candidates (set by election config)
+    signal input voteChoice;        // 0 = against, 1 = for
     signal input chainId;           // Chain identifier (prevents cross-chain replay)
 
     // Private inputs
@@ -59,15 +57,10 @@ template VoteV2(levels) {
 
     nullifier === nullifierHasher.out;
 
-    // 4. Verify candidate index is within bounds: voteChoice < numCandidates
-    // Uses 32-bit LessThan comparator from circomlib.
-    // This prevents a voter from proving a vote for a non-existent candidate.
-    component validChoice = LessThan(32);
-    validChoice.in[0] <== voteChoice;
-    validChoice.in[1] <== numCandidates;
-    validChoice.out === 1;
+    // 4. Verify vote choice is binary (0 or 1)
+    voteChoice * (voteChoice - 1) === 0;
 }
 
 // Default tree depth of 18 (supports ~262K members)
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId] - 7 signals
-component main {public [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId]} = VoteV2(18);
+// Public signals: [root, nullifier, daoId, proposalId, voteChoice, chainId] - 6 signals
+component main {public [root, nullifier, daoId, proposalId, voteChoice, chainId]} = VoteV2(18);

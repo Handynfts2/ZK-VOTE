@@ -12,12 +12,33 @@ declare global {
   namespace Express {
     interface Request {
       ctx?: string;
+      traceId?: string;
     }
   }
 }
 import crypto from "crypto";
 // import { config } from "../config.js"; // Unused - kept for reference
 import { log, hashIp, getRedactionPolicy } from "../services/logger.js";
+
+const TRACEPARENT_RE =
+  /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+
+/**
+ * Parses an inbound W3C `traceparent` header (version-traceid-parentid-flags,
+ * https://www.w3.org/TR/trace-context/#traceparent-header) and returns its
+ * trace ID, or `undefined` if the header is absent or malformed.
+ */
+export function parseIncomingTraceId(
+  header: string | undefined,
+): string | undefined {
+  if (!header) return undefined;
+  const match = TRACEPARENT_RE.exec(header.trim());
+  if (!match) return undefined;
+  const traceId = match[2];
+  // An all-zero trace ID is explicitly invalid per the spec.
+  if (/^0+$/.test(traceId)) return undefined;
+  return traceId;
+}
 
 /**
  * Request logging middleware
@@ -31,10 +52,20 @@ export function requestLogger(
   const ctx = crypto.randomBytes(6).toString("hex");
   req.ctx = ctx;
 
+  // W3C Trace Context (#141): continue an inbound trace ID when present so
+  // this request can be correlated across services, otherwise start a new
+  // trace. The span ID always identifies this hop.
+  const traceId =
+    parseIncomingTraceId(req.get("traceparent")) ||
+    crypto.randomBytes(16).toString("hex");
+  const spanId = crypto.randomBytes(8).toString("hex");
+  req.traceId = traceId;
+  res.setHeader("traceparent", `00-${traceId}-${spanId}-01`);
+
   // Build IP meta based on configuration
   const policy = getRedactionPolicy();
   let ipMeta: Record<string, string> = {};
-  
+
   if (policy.showClientIp === "plain") {
     ipMeta = { ip: req.ip || "" };
   } else if (policy.showClientIp === "hash") {
@@ -49,6 +80,7 @@ export function requestLogger(
 
   log("info", "request_start", {
     ctx,
+    traceId,
     path: req.path,
     method: req.method,
     ...ipMeta,
@@ -59,6 +91,7 @@ export function requestLogger(
   res.on("finish", () => {
     log("info", "request_end", {
       ctx,
+      traceId,
       path: req.path,
       status: res.statusCode,
     });
@@ -79,16 +112,17 @@ export function errorLogger(
 ): void {
   const ctx = req.ctx || "unknown";
   const isProduction = process.env.NODE_ENV === "production";
-  
+
   // Log the error with redaction
   log("error", "request_error", {
     ctx,
+    traceId: req.traceId,
     path: req.path,
     method: req.method,
     error: err.message,
     // In production, don't log stack traces
     ...(isProduction ? {} : { stack: err.stack }),
   });
-  
+
   next(err);
 }

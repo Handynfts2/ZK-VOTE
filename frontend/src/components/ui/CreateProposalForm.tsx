@@ -9,6 +9,7 @@ import { Label } from "./Label";
 import { Upload } from "lucide-react";
 import { useTheme } from "../../hooks/useTheme";
 import { relayerFetch } from "../../lib/api";
+import { PROPOSAL_TEMPLATES } from "../../lib/proposalTemplates";
 
 interface ProposalMetadata {
   version: number;
@@ -53,8 +54,27 @@ export default function CreateProposalForm({
   );
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(
+    null,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+
+  // Issue #383: applying a template only prefills — it never overwrites
+  // text the member has already started typing.
+  const applyTemplate = useCallback(
+    (templateId: string) => {
+      const template = PROPOSAL_TEMPLATES.find((t) => t.id === templateId);
+      if (!template) return;
+
+      setAppliedTemplateId(templateId);
+      setVoteMode(template.voteMode);
+      setDeadlineSeconds(String(template.deadlineSeconds));
+      if (!title.trim()) setTitle(template.titlePlaceholder);
+      if (!body.trim()) setBody(template.bodyScaffold);
+    },
+    [title, body],
+  );
 
   // Remove toolbar buttons from tab order
   useEffect(() => {
@@ -202,6 +222,31 @@ export default function CreateProposalForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {/* Templates */}
+      <div className="space-y-2">
+        <Label>Start from a template (optional)</Label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {PROPOSAL_TEMPLATES.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              disabled={isProcessing}
+              onClick={() => applyTemplate(template.id)}
+              className={`text-left rounded-lg border p-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                appliedTemplateId === template.id
+                  ? "border-primary bg-primary/5"
+                  : "border-input hover:border-primary/50"
+              }`}
+            >
+              <p className="text-sm font-medium">{template.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {template.description}
+              </p>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Title */}
       <div className="space-y-2">
         <Label>

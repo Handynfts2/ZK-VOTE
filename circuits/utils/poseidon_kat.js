@@ -77,16 +77,37 @@ async function main() {
     console.log("");
   }
 
-  // Special case: Verify Merkle tree zero values
-  console.log("=== Merkle Tree Zero Values ===\n");
-  console.log("Computing zeros[0..5] where zeros[i+1] = Poseidon(zeros[i], zeros[i]):\n");
+  // Special case: raw 2-input Poseidon parity (unaffected by #167 — this is
+  // the underlying hash_pair primitive both circomlib and the Stellar host
+  // must agree on, independent of how the tree uses it).
+  console.log("=== Raw Poseidon(2) Zero Chain (parameter parity only) ===\n");
+  console.log("Computing raw[0..5] where raw[i+1] = Poseidon(raw[i], raw[i]), raw[0] = 0:\n");
 
   let zero = poseidon.F.zero;
-  console.log(`zeros[0] = ${poseidon.F.toString(zero)}`);
+  console.log(`raw[0] = ${poseidon.F.toString(zero)}`);
 
   for (let i = 0; i < 5; i++) {
     zero = poseidon([zero, zero]);
-    console.log(`zeros[${i+1}] = ${poseidon.F.toString(zero)}`);
+    console.log(`raw[${i+1}] = ${poseidon.F.toString(zero)}`);
+  }
+
+  // #167: the tree itself no longer uses raw[0] (= 0) as its empty-leaf
+  // value. Every leaf — including the empty/zero leaf — is domain-tagged
+  // as Poseidon(LEAF_DOMAIN, leaf) before entering the tree, so a raw
+  // commitment (or a forged internal-node hash) can never be inserted
+  // directly as a tree value. LEAF_DOMAIN must match across
+  // merkle_tree.circom, frontend/src/lib/merkletree.ts, and
+  // contracts/membership-tree/src/lib.rs.
+  console.log("\n=== Merkle Tree Zero Values (domain-separated, #167) ===\n");
+  console.log("zeros[0] = Poseidon(LEAF_DOMAIN, 0); zeros[i+1] = Poseidon(zeros[i], zeros[i]):\n");
+
+  const LEAF_DOMAIN = 1n;
+  let domainZero = poseidon([LEAF_DOMAIN, 0n]);
+  console.log(`zeros[0] = ${poseidon.F.toString(domainZero)}`);
+
+  for (let i = 0; i < 5; i++) {
+    domainZero = poseidon([domainZero, domainZero]);
+    console.log(`zeros[${i+1}] = ${poseidon.F.toString(domainZero)}`);
   }
 
   console.log("\n=== Instructions for On-Chain Verification ===\n");

@@ -117,9 +117,7 @@ export default function CircuitUpgradePanel({
   return (
     <div className="border border-border rounded-lg p-4 bg-card text-card-foreground shadow-sm">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold">
-          Circuit Registry
-        </h3>
+        <h3 className="text-lg font-semibold">Circuit Registry</h3>
         <button
           onClick={handleRefresh}
           disabled={refreshing}

@@ -2,13 +2,12 @@
  * Tests for PII Redaction in Logger
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
-import { 
-  redact, 
+import { describe, it, expect } from "vitest";
+import {
+  redact,
   truncateStellarAddress,
   setRedactionPolicy,
   getRedactionPolicy,
-  __test 
 } from "../src/services/logger.js";
 
 describe("Logger PII Redaction", () => {

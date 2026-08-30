@@ -37,12 +37,24 @@ declare module "circomlibjs" {
   export function buildPoseidon(): Promise<PoseidonHasher>;
 
   /**
+   * Build a Pedersen hasher instance
+   */
+  export function buildPedersenHash(): Promise<any>;
+
+  /**
+   * Build a BabyJubJub curve instance
+   */
+  export function buildBabyjub(): Promise<any>;
+
+  /**
    * Synchronous Poseidon (if available)
    */
   export const poseidon: PoseidonHasher | undefined;
 
   const defaultExport: {
     buildPoseidon: typeof buildPoseidon;
+    buildPedersenHash: typeof buildPedersenHash;
+    buildBabyjub: typeof buildBabyjub;
     poseidon?: PoseidonHasher;
   };
   export default defaultExport;

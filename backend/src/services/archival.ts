@@ -1,6 +1,6 @@
 /**
  * Event Data Archival Service
- * 
+ *
  * Manages archival of historical blockchain events from completed/ended elections:
  * - Identifies eligible historical events (ended elections, age >= 90 days)
  * - Ensures active election events are NEVER archived
@@ -93,11 +93,13 @@ export function initArchiveRegistry(db: DatabaseType): void {
 /**
  * Run historical event archival process
  */
-export async function runArchivalJob(options: {
-  ageDays?: number;
-  archiveDir?: string;
-  batchSize?: number;
-} = {}): Promise<ArchivalJobResult> {
+export async function runArchivalJob(
+  options: {
+    ageDays?: number;
+    archiveDir?: string;
+    batchSize?: number;
+  } = {},
+): Promise<ArchivalJobResult> {
   const db = getDb();
   if (!db) {
     return {
@@ -115,9 +117,13 @@ export async function runArchivalJob(options: {
   initArchiveRegistry(db);
 
   const dbFilePath = path.join(__dirname, "..", "..", "data", "zkvote.db");
-  const dbSizeBytesBefore = fs.existsSync(dbFilePath) ? fs.statSync(dbFilePath).size : 0;
+  const dbSizeBytesBefore = fs.existsSync(dbFilePath)
+    ? fs.statSync(dbFilePath).size
+    : 0;
   const ageDays = options.ageDays ?? config.archivalAgeDays ?? 90;
-  const cutoffDate = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000).toISOString();
+  const cutoffDate = new Date(
+    Date.now() - ageDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
   const targetDir = options.archiveDir || ensureArchiveDir();
   const batchSize = options.batchSize || 100;
 
@@ -125,7 +131,9 @@ export async function runArchivalJob(options: {
 
   try {
     // Step 1: Discover ended elections (proposals with proposal_closed or proposal_archived events)
-    const partitionRows = db.prepare("SELECT dao_id FROM partition_registry").all() as Array<{ dao_id: number }>;
+    const partitionRows = db
+      .prepare("SELECT dao_id FROM partition_registry")
+      .all() as Array<{ dao_id: number }>;
     const registeredDaos = partitionRows.map((r) => r.dao_id);
 
     let totalArchivedCount = 0;
@@ -133,16 +141,22 @@ export async function runArchivalJob(options: {
 
     for (const daoId of registeredDaos) {
       const tableName = `events_${daoId}`;
-      const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(tableName);
+      const tableExists = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+        .get(tableName);
       if (!tableExists) continue;
 
       // Find closed proposal IDs
       const closedPropRows = db
-        .prepare(`SELECT DISTINCT json_extract(data, '$.proposalId') as propId FROM ${tableName} WHERE type IN ('proposal_closed', 'proposal_archived') AND data IS NOT NULL`)
+        .prepare(
+          `SELECT DISTINCT json_extract(data, '$.proposalId') as propId FROM ${tableName} WHERE type IN ('proposal_closed', 'proposal_archived') AND data IS NOT NULL`,
+        )
         .all() as Array<{ propId: number | null }>;
 
       const closedPropIds = new Set<number>(
-        closedPropRows.map((r) => Number(r.propId)).filter((id) => !isNaN(id) && id > 0)
+        closedPropRows
+          .map((r) => Number(r.propId))
+          .filter((id) => !isNaN(id) && id > 0),
       );
 
       if (closedPropIds.size === 0) continue;
@@ -150,14 +164,15 @@ export async function runArchivalJob(options: {
       // Select events belonging to closed proposals and older than cutoffDate
       const eligibleEvents = db
         .prepare(
-          `SELECT * FROM ${tableName} WHERE timestamp <= ? ORDER BY timestamp ASC`
+          `SELECT * FROM ${tableName} WHERE timestamp <= ? ORDER BY timestamp ASC`,
         )
         .all(cutoffDate) as Array<any>;
 
       const eventsToArchive = eligibleEvents.filter((ev) => {
         try {
           if (!ev.data) return false;
-          const parsed = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+          const parsed =
+            typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
           const propId = Number(parsed.proposalId || parsed.proposal_id);
           return closedPropIds.has(propId);
         } catch (_) {
@@ -172,15 +187,22 @@ export async function runArchivalJob(options: {
       const fileName = `events_dao_${daoId}_${Date.now()}.jsonl.gz`;
       const filePath = path.join(targetDir, fileName);
 
-      const jsonlLines = eventsToArchive.map((ev) => JSON.stringify(ev)).join("\n");
+      const jsonlLines = eventsToArchive
+        .map((ev) => JSON.stringify(ev))
+        .join("\n");
       const compressedBuffer = zlib.gzipSync(Buffer.from(jsonlLines, "utf-8"));
       fs.writeFileSync(filePath, compressedBuffer);
 
-      const checksum = crypto.createHash("sha256").update(compressedBuffer).digest("hex");
+      const checksum = crypto
+        .createHash("sha256")
+        .update(compressedBuffer)
+        .digest("hex");
       const sizeBytes = compressedBuffer.length;
 
       const timestamps = eventsToArchive.map((e) => e.timestamp).sort();
-      const ledgers = eventsToArchive.map((e) => e.ledger).filter((l) => l !== null);
+      const ledgers = eventsToArchive
+        .map((e) => e.ledger)
+        .filter((l) => l !== null);
 
       const record: ArchiveRecord = {
         archive_id: archiveId,
@@ -198,10 +220,12 @@ export async function runArchivalJob(options: {
       };
 
       // Register archive record in index
-      db.prepare(`
+      db.prepare(
+        `
         INSERT INTO archive_records (archive_id, dao_id, proposal_id, file_name, file_path, event_count, min_timestamp, max_timestamp, min_ledger, max_ledger, size_bytes, checksum)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+      `,
+      ).run(
         record.archive_id,
         record.dao_id,
         record.proposal_id,
@@ -213,7 +237,7 @@ export async function runArchivalJob(options: {
         record.min_ledger,
         record.max_ledger,
         record.size_bytes,
-        record.checksum
+        record.checksum,
       );
 
       createdRecords.push(record);
@@ -223,7 +247,9 @@ export async function runArchivalJob(options: {
       for (let i = 0; i < eventIds.length; i += batchSize) {
         const batch = eventIds.slice(i, i + batchSize);
         const placeholders = batch.map(() => "?").join(",");
-        db.prepare(`DELETE FROM ${tableName} WHERE id IN (${placeholders})`).run(...batch);
+        db.prepare(
+          `DELETE FROM ${tableName} WHERE id IN (${placeholders})`,
+        ).run(...batch);
       }
 
       totalArchivedCount += eventsToArchive.length;
@@ -232,7 +258,9 @@ export async function runArchivalJob(options: {
     // Run optimize / checkpoint
     db.pragma("wal_checkpoint(TRUNCATE)");
 
-    const dbSizeBytesAfter = fs.existsSync(dbFilePath) ? fs.statSync(dbFilePath).size : 0;
+    const dbSizeBytesAfter = fs.existsSync(dbFilePath)
+      ? fs.statSync(dbFilePath).size
+      : 0;
     const savedSizeBytes = Math.max(0, dbSizeBytesBefore - dbSizeBytesAfter);
 
     log("info", "archival_job_complete", {
@@ -278,11 +306,15 @@ export function getArchiveIndex(daoId?: number): ArchiveRecord[] {
 
   if (daoId !== undefined) {
     return db
-      .prepare("SELECT * FROM archive_records WHERE dao_id = ? ORDER BY created_at DESC")
+      .prepare(
+        "SELECT * FROM archive_records WHERE dao_id = ? ORDER BY created_at DESC",
+      )
       .all(daoId) as ArchiveRecord[];
   }
 
-  return db.prepare("SELECT * FROM archive_records ORDER BY created_at DESC").all() as ArchiveRecord[];
+  return db
+    .prepare("SELECT * FROM archive_records ORDER BY created_at DESC")
+    .all() as ArchiveRecord[];
 }
 
 /**
@@ -293,7 +325,9 @@ export function readArchivedEvents(archiveId: string): any[] {
   if (!db) return [];
   initArchiveRegistry(db);
 
-  const record = db.prepare("SELECT * FROM archive_records WHERE archive_id = ?").get(archiveId) as ArchiveRecord | undefined;
+  const record = db
+    .prepare("SELECT * FROM archive_records WHERE archive_id = ?")
+    .get(archiveId) as ArchiveRecord | undefined;
   if (!record || !fs.existsSync(record.file_path)) {
     return [];
   }
@@ -306,7 +340,10 @@ export function readArchivedEvents(archiveId: string): any[] {
       .filter((line) => line.trim().length > 0)
       .map((line) => JSON.parse(line));
   } catch (err) {
-    log("error", "read_archive_failed", { archiveId, error: (err as Error).message });
+    log("error", "read_archive_failed", {
+      archiveId,
+      error: (err as Error).message,
+    });
     return [];
   }
 }
@@ -314,14 +351,18 @@ export function readArchivedEvents(archiveId: string): any[] {
 /**
  * Start background periodic archival task
  */
-export function startArchivalTask(intervalMs: number = config.archivalIntervalMs || 86400000): void {
+export function startArchivalTask(
+  intervalMs: number = config.archivalIntervalMs || 86400000,
+): void {
   if (archivalTimer) {
     clearInterval(archivalTimer);
   }
 
   archivalTimer = setInterval(() => {
     runArchivalJob().catch((err) => {
-      log("error", "periodic_archival_failed", { error: (err as Error).message });
+      log("error", "periodic_archival_failed", {
+        error: (err as Error).message,
+      });
     });
   }, intervalMs);
 

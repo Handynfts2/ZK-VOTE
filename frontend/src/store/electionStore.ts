@@ -59,5 +59,6 @@ export const electionStore = {
     return () => listeners.delete(listener);
   },
 
-  getSanitizedState: () => sanitizeState(state as unknown as Record<string, unknown>),
+  getSanitizedState: () =>
+    sanitizeState(state as unknown as Record<string, unknown>),
 };

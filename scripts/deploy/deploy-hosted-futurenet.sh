@@ -54,8 +54,14 @@ DEPLOY_VERSION=$(date +%s)
 success "Deployment version: $DEPLOY_VERSION"
 
 # Step 1: Build contracts
+# NOTE: build each contract crate separately (not `cargo build` for all at once).
+# Building everything together triggers Cargo feature unification that turns on
+# num-traits' float impls, which fail to compile on newer rustc (>=1.80) for
+# wasm32v1-none. Per-crate builds keep num-traits feature-minimal and succeed.
 step "Building all contracts..."
-cargo build --target wasm32v1-none --release
+for c in dao-registry membership-sbt membership-tree voting comments; do
+  cargo build -p "$c" --target wasm32v1-none --release
+done
 success "Contracts built successfully"
 
 # Step 2: Deploy contracts

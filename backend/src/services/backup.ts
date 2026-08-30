@@ -1,6 +1,6 @@
 /**
  * Database Backup and Point-in-Time Recovery Service
- * 
+ *
  * Provides automated SQLite database backups using SQLite's backup API,
  * backup integrity verification, Point-in-Time Recovery (PITR),
  * continuous replication status reporting (Litestream), and external storage integration.
@@ -11,7 +11,7 @@ import path from "path";
 import crypto from "crypto";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import { fileURLToPath } from "url";
-import { getDb, initDb } from "./db.js";
+import { getDb, initDb, closeDb } from "./db.js";
 import { log } from "./logger.js";
 import { config } from "../config.js";
 
@@ -19,7 +19,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BACKUP_DIR = path.join(__dirname, "..", "..", "data", "backups");
-const LITESTREAM_CONFIG_PATH = path.join(__dirname, "..", "..", "litestream.yml");
+const LITESTREAM_CONFIG_PATH = path.join(
+  __dirname,
+  "..",
+  "..",
+  "litestream.yml",
+);
 
 export interface BackupResult {
   success: boolean;
@@ -81,11 +86,13 @@ export function ensureBackupDir(): string {
 /**
  * Perform an automated backup using better-sqlite3's online backup API
  */
-export async function createBackup(options: {
-  destinationDir?: string;
-  backupName?: string;
-  maxRetentionCount?: number;
-} = {}): Promise<BackupResult> {
+export async function createBackup(
+  options: {
+    destinationDir?: string;
+    backupName?: string;
+    maxRetentionCount?: number;
+  } = {},
+): Promise<BackupResult> {
   const startTime = Date.now();
   const targetDir = options.destinationDir || ensureBackupDir();
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -106,7 +113,10 @@ export async function createBackup(options: {
     // Calculate file size and sha256 checksum
     const stats = fs.statSync(backupFilePath);
     const fileBuffer = fs.readFileSync(backupFilePath);
-    const checksum = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+    const checksum = crypto
+      .createHash("sha256")
+      .update(fileBuffer)
+      .digest("hex");
 
     // Perform immediate backup integrity verification
     const verification = await verifyBackup(backupFilePath);
@@ -115,13 +125,22 @@ export async function createBackup(options: {
       if (fs.existsSync(backupFilePath)) {
         fs.unlinkSync(backupFilePath);
       }
-      throw new Error(`Backup integrity check failed: ${verification.error || verification.integrityResult}`);
+      throw new Error(
+        `Backup integrity check failed: ${verification.error || verification.integrityResult}`,
+      );
     }
 
     // Attempt upload to external storage if S3 / cloud storage configured
     let uploadedToStorage = false;
-    if (config.s3Bucket || process.env.BACKUP_S3_BUCKET || process.env.OBJECT_STORAGE_URL) {
-      uploadedToStorage = await uploadToExternalStorage(backupFilePath, fileName);
+    if (
+      config.s3Bucket ||
+      process.env.BACKUP_S3_BUCKET ||
+      process.env.OBJECT_STORAGE_URL
+    ) {
+      uploadedToStorage = await uploadToExternalStorage(
+        backupFilePath,
+        fileName,
+      );
     }
 
     // Apply retention policy (clean up old backups beyond max count)
@@ -168,21 +187,32 @@ export async function createBackup(options: {
 /**
  * Verify integrity of a SQLite backup file
  */
-export async function verifyBackup(backupFilePath: string): Promise<VerificationResult> {
+export async function verifyBackup(
+  backupFilePath: string,
+): Promise<VerificationResult> {
   if (!fs.existsSync(backupFilePath)) {
-    return { valid: false, error: `Backup file does not exist: ${backupFilePath}` };
+    return {
+      valid: false,
+      error: `Backup file does not exist: ${backupFilePath}`,
+    };
   }
 
   let tempDb: DatabaseType | null = null;
   try {
     tempDb = new Database(backupFilePath, { readonly: true });
-    const row = tempDb.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+    const row = tempDb.prepare("PRAGMA integrity_check").get() as
+      | { integrity_check?: string }
+      | undefined;
     const result = row ? Object.values(row)[0] : "failed";
 
     if (result === "ok") {
       return { valid: true, integrityResult: "ok" };
     } else {
-      return { valid: false, integrityResult: String(result), error: `Integrity check failed: ${result}` };
+      return {
+        valid: false,
+        integrityResult: String(result),
+        error: `Integrity check failed: ${result}`,
+      };
     }
   } catch (err) {
     return { valid: false, error: (err as Error).message };
@@ -190,7 +220,9 @@ export async function verifyBackup(backupFilePath: string): Promise<Verification
     if (tempDb) {
       try {
         tempDb.close();
-      } catch (_) { /* noop */ }
+      } catch (_) {
+        // best-effort close; nothing to recover
+      }
     }
   }
 }
@@ -200,7 +232,7 @@ export async function verifyBackup(backupFilePath: string): Promise<Verification
  */
 export async function restoreFromBackup(
   backupFilePath: string,
-  targetDbPath?: string
+  targetDbPath?: string,
 ): Promise<RestoreResult> {
   try {
     log("info", "db_restore_start", { backupFilePath, targetDbPath });
@@ -218,14 +250,13 @@ export async function restoreFromBackup(
     const defaultDbPath = path.join(__dirname, "..", "..", "data", "zkvote.db");
     const destinationPath = targetDbPath || defaultDbPath;
 
-    // Step 2: Close current database connection if open
-    const currentDb = getDb();
-    if (currentDb) {
-      try {
-        currentDb.close();
-      } catch (err) {
-        log("warn", "db_close_before_restore_warn", { error: (err as Error).message });
-      }
+    // Step 2: Close current database connections if open
+    try {
+      closeDb();
+    } catch (err) {
+      log("warn", "db_close_before_restore_warn", {
+        error: (err as Error).message,
+      });
     }
 
     // Remove old DB file and any WAL / SHM files
@@ -244,7 +275,10 @@ export async function restoreFromBackup(
     const restoredDb = initDb(destinationPath);
     const restoredVerification = restoredDb.prepare("PRAGMA quick_check").get();
 
-    log("info", "db_restore_complete", { destinationPath, result: restoredVerification });
+    log("info", "db_restore_complete", {
+      destinationPath,
+      result: restoredVerification,
+    });
 
     return {
       success: true,
@@ -264,13 +298,23 @@ export async function restoreFromBackup(
 /**
  * Mockable external storage upload handler (S3/GCS)
  */
-async function uploadToExternalStorage(filePath: string, fileName: string): Promise<boolean> {
+async function uploadToExternalStorage(
+  filePath: string,
+  fileName: string,
+): Promise<boolean> {
   try {
-    const bucket = config.s3Bucket || process.env.BACKUP_S3_BUCKET || "zkvote-backups";
-    log("info", "db_backup_external_upload_simulated", { bucket, fileName, size: fs.statSync(filePath).size });
+    const bucket =
+      config.s3Bucket || process.env.BACKUP_S3_BUCKET || "zkvote-backups";
+    log("info", "db_backup_external_upload_simulated", {
+      bucket,
+      fileName,
+      size: fs.statSync(filePath).size,
+    });
     return true;
   } catch (err) {
-    log("warn", "db_backup_external_upload_failed", { error: (err as Error).message });
+    log("warn", "db_backup_external_upload_failed", {
+      error: (err as Error).message,
+    });
     return false;
   }
 }
@@ -286,7 +330,11 @@ export function pruneOldBackups(dirPath: string, maxCount: number): void {
       .filter((f) => f.startsWith("zkvote-backup-") && f.endsWith(".db"))
       .map((f) => {
         const fullPath = path.join(dirPath, f);
-        return { name: f, path: fullPath, mtime: fs.statSync(fullPath).mtimeMs };
+        return {
+          name: f,
+          path: fullPath,
+          mtime: fs.statSync(fullPath).mtimeMs,
+        };
       })
       .sort((a, b) => b.mtime - a.mtime); // newest first
 
@@ -307,7 +355,10 @@ export function pruneOldBackups(dirPath: string, maxCount: number): void {
  */
 export function getLitestreamStatus(): LitestreamStatus {
   const configured = fs.existsSync(LITESTREAM_CONFIG_PATH);
-  const enabled = configured && (process.env.LITESTREAM_ENABLED === "true" || process.env.NODE_ENV === "production");
+  const enabled =
+    configured &&
+    (process.env.LITESTREAM_ENABLED === "true" ||
+      process.env.NODE_ENV === "production");
 
   return {
     enabled,
@@ -328,26 +379,34 @@ export function getBackupStatus(): BackupStatus {
     backupCount,
     backupDir: BACKUP_DIR,
     litestream: getLitestreamStatus(),
-    scheduledIntervalMs: backupTimer ? (config.backupIntervalMs || 86400000) : null,
+    scheduledIntervalMs: backupTimer
+      ? config.backupIntervalMs || 86400000
+      : null,
   };
 }
 
 /**
  * Start automated scheduled database backups
  */
-export function startScheduledBackups(intervalMs: number = config.backupIntervalMs || 86400000): void {
+export function startScheduledBackups(
+  intervalMs: number = config.backupIntervalMs || 86400000,
+): void {
   if (backupTimer) {
     clearInterval(backupTimer);
   }
 
   // Trigger initial backup asynchronously
   createBackup().catch((err) => {
-    log("error", "initial_scheduled_backup_failed", { error: (err as Error).message });
+    log("error", "initial_scheduled_backup_failed", {
+      error: (err as Error).message,
+    });
   });
 
   backupTimer = setInterval(() => {
     createBackup().catch((err) => {
-      log("error", "periodic_scheduled_backup_failed", { error: (err as Error).message });
+      log("error", "periodic_scheduled_backup_failed", {
+        error: (err as Error).message,
+      });
     });
   }, intervalMs);
 

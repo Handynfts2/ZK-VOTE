@@ -25,8 +25,10 @@ import {
 } from "../lib/zkproof";
 import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { relayerFetch } from "../lib/api";
+import { useOptimisticComment } from "../queries/commentQueries";
+import type { CommentWithContent } from "../lib/comments";
 
 interface CommentFormProps {
   daoId: number;
@@ -60,6 +62,7 @@ export default function CommentForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { addOptimisticComment, clearPendingComment } = useOptimisticComment();
 
   // Public comments require wallet (direct signing), anonymous requires registration
   const canComment = hasMembership && (isAnonymous ? isRegistered : !!kit);
@@ -82,9 +85,13 @@ export default function CommentForm({
       if (isAnonymous) {
         // Generate ZK proof for anonymous comment (same flow as voting)
         setProgress("Loading credentials...");
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
 
-        let secret: string, salt: string, commitment: string, leafIndex: number;
+        let secret: string,
+          salt: string,
+          blindingFactor: string,
+          commitment: string,
+          leafIndex: number;
         const cached = getZKCredentials(daoId, publicKey);
 
         if (!cached) {
@@ -106,12 +113,14 @@ export default function CommentForm({
           leafIndex = Number(leafIndexResult.result);
           secret = credentials.secret;
           salt = credentials.salt;
+          blindingFactor = credentials.blindingFactor;
           commitment = credentials.commitment;
 
           storeZKCredentials(daoId, publicKey, credentials, leafIndex);
         } else {
           secret = cached.secret;
           salt = cached.salt;
+          blindingFactor = cached.blindingFactor;
           commitment = cached.commitment;
           leafIndex = cached.leafIndex;
         }
@@ -169,6 +178,7 @@ export default function CommentForm({
           commitment: commitment.toString(),
           secret: secret.toString(),
           salt: salt.toString(),
+          blindingFactor: blindingFactor.toString(),
           pathElements,
           pathIndices,
         };
@@ -177,50 +187,91 @@ export default function CommentForm({
           console.log("Comment proof input ready, generating proof...");
         }
 
-        const { proof } = await generateVoteProof(
-          proofInput,
-          wasm,
-          zkey,
-        );
+        const { proof } = await generateVoteProof(proofInput, wasm, zkey);
 
         // Format proof for Soroban
         const { proof_a, proof_b, proof_c } = formatProofForSoroban(proof);
 
-        // Submit anonymous comment via relayer
-        setProgress("Submitting comment...");
-        const response = await relayerFetch("/comment/anonymous", {
+        const requestBody = JSON.stringify({
+          daoId,
+          proposalId,
+          contentCid: cid,
+          parentId: parentId ?? null,
+          voteChoice: false, // Arbitrary - contract ignores this for comments
+          nullifier: toHexBE(nullifier),
+          root: toHexBE(root),
+          proof: {
+            a: proof_a,
+            b: proof_b,
+            c: proof_c,
+          },
+        });
+
+        // Create optimistic comment
+        const optimisticComment: CommentWithContent = {
+          id: -Math.floor(Math.random() * 1000000), // temp ID
+          author: null,
+          contentCid: cid,
+          parentId: parentId ?? null,
+          createdAt: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+          revisionCids: [],
+          deleted: false,
+          deletedBy: null,
+          nullifier: nullifier.toString(),
+          content: {
+            version: 1,
+            body: body.trim(),
+            createdAt: new Date().toISOString(),
+          },
+          replies: [],
+          isCollapsed: false,
+          isPending: true,
+        };
+
+        const revertOptimistic = addOptimisticComment(
+          daoId,
+          proposalId,
+          optimisticComment,
+        );
+
+        // Clear form immediately
+        setBody("");
+        setProgress("");
+        onSubmit();
+
+        // Submit anonymous comment via relayer in background
+        relayerFetch("/comment/anonymous", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            daoId,
-            proposalId,
-            contentCid: cid,
-            parentId: parentId ?? null,
-            voteChoice: false, // Arbitrary - contract ignores this for comments
-            nullifier: toHexBE(nullifier),
-            root: toHexBE(root),
-            proof: {
-              a: proof_a,
-              b: proof_b,
-              c: proof_c,
-            },
-          }),
-        });
+          body: requestBody,
+        })
+          .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) {
+              revertOptimistic();
+              alert(
+                "Failed to submit anonymous comment: " + (data.error || ""),
+              );
+              return;
+            }
 
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error || "Failed to submit anonymous comment");
-        }
+            // Save anonymous comment record for edit/delete capability
+            saveAnonymousComment({
+              commentId: data.commentId,
+              proposalId,
+              daoId,
+              nullifier: nullifier.toString(),
+            });
 
-        // Save anonymous comment record for edit/delete capability
-        saveAnonymousComment({
-          commentId: data.commentId,
-          proposalId,
-          daoId,
-          nullifier,
-        });
+            clearPendingComment(daoId, proposalId);
+          })
+          .catch((_err) => {
+            revertOptimistic();
+            alert("Network error submitting comment");
+          });
       } else {
         // Submit public comment via direct wallet signing
         // The contract requires author.require_auth() so we must sign directly
@@ -231,7 +282,7 @@ export default function CommentForm({
         }
 
         setProgress("Preparing transaction...");
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
 
         // Build the transaction using the comments contract
         const tx = await clients.comments.add_comment({
@@ -247,12 +298,12 @@ export default function CommentForm({
         await tx.signAndSend({
           signTransaction: kit.signTransaction.bind(kit),
         });
-      }
 
-      // Success - clear form and notify parent
-      setBody("");
-      setProgress("");
-      onSubmit();
+        // Success - clear form and notify parent
+        setBody("");
+        setProgress("");
+        onSubmit();
+      }
     } catch (err) {
       console.error("Failed to submit comment:", err);
       setError(err instanceof Error ? err.message : "Failed to submit comment");

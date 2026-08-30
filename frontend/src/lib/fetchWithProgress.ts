@@ -26,7 +26,10 @@ export async function fetchWithProgress(
     // Streaming not supported (e.g. some test environments) — fall back to
     // a single-shot download with a single progress callback.
     const buffer = await response.arrayBuffer();
-    onProgress?.({ loadedBytes: buffer.byteLength, totalBytes: buffer.byteLength });
+    onProgress?.({
+      loadedBytes: buffer.byteLength,
+      totalBytes: buffer.byteLength,
+    });
     return new Uint8Array(buffer);
   }
 

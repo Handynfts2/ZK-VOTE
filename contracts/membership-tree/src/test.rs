@@ -437,3 +437,56 @@ fn test_duplicate_commitment_different_address_fails() {
     tree_client.register_with_caller(&1u64, &commitment, &member_a);
     tree_client.register_with_caller(&1u64, &commitment, &member_b);
 }
+
+// #167: leaves must be domain-separated (Poseidon(LEAF_DOMAIN, leaf)) before
+// entering the tree, not inserted as a raw commitment. Regression-tests that:
+//   1. the leaf's domain-tagged hash differs from the raw commitment, and
+//   2. independently reconstructing the root from get_merkle_path's siblings
+//      using that same domain-tagged leaf hash reproduces get_root's value —
+//      i.e. the on-chain tree and an off-chain verifier (frontend/circuit)
+//      that domain-tags leaves the same way stay in agreement.
+#[test]
+fn test_leaf_is_domain_separated_before_tree_insertion() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let member_a = Address::generate(&env);
+    let member_b = Address::generate(&env);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &3u32, &Symbol::new(&env, "BN254"), &admin);
+    sbt_client.set_member(&1u64, &member_a, &true);
+    sbt_client.set_member(&1u64, &member_b, &true);
+
+    let commitment_a = U256::from_u32(&env, 111);
+    let commitment_b = U256::from_u32(&env, 222);
+    tree_client.register_with_caller(&1u64, &commitment_a, &member_a);
+    tree_client.register_with_caller(&1u64, &commitment_b, &member_b);
+
+    let field = Symbol::new(&env, "BN254");
+    let leaf_domain = U256::from_u32(&env, 1);
+
+    // 1. The domain-tagged leaf hash must differ from the raw commitment —
+    // otherwise leaves would still be indistinguishable from arbitrary
+    // internal-node hashes.
+    let leaf_hash_a = tree_client.test_poseidon_hash(&leaf_domain, &commitment_a, &field);
+    assert_ne!(leaf_hash_a, commitment_a);
+
+    // 2. Rebuild the root off-chain using get_merkle_path's siblings and the
+    // same domain-tagged leaf hash the circuit/frontend would compute, and
+    // confirm it matches get_root.
+    let (path_elements, path_indices) = tree_client.get_merkle_path(&1u64, &0u32);
+    let mut current = leaf_hash_a;
+    for i in 0..path_elements.len() {
+        let sibling = path_elements.get(i).unwrap();
+        let is_left = path_indices.get(i).unwrap() == 0;
+        current = if is_left {
+            tree_client.test_poseidon_hash(&current, &sibling, &field)
+        } else {
+            tree_client.test_poseidon_hash(&sibling, &current, &field)
+        };
+    }
+
+    assert_eq!(current, tree_client.get_root(&1u64));
+}

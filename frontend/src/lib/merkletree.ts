@@ -1,10 +1,22 @@
 // Merkle tree path computation for Poseidon tree
 import { buildPoseidon } from "circomlibjs";
-import { initializeContractClients } from "./contracts";
+import { getZkVoteClient } from "./client";
 
 const TREE_DEPTH = 18;
 
-// Cache for zero hashes at each level
+// Leaf domain-separation tag (#167): every leaf is hashed with this fixed
+// tag before entering the tree — leafHash = Poseidon(LEAF_DOMAIN, leaf) —
+// so a raw commitment is never inserted directly as a tree value. Internal
+// nodes keep the plain Poseidon(left, right) they always used. Must match
+// LEAF_DOMAIN in circuits/merkle_tree.circom and the on-chain tree in
+// contracts/membership-tree (whose `hash_pair` only has parameters for the
+// 2-input Poseidon width, so this scheme deliberately avoids needing a
+// wider hash for internal nodes).
+const LEAF_DOMAIN = 1n;
+
+// Cache for zero hashes at each level. zeros[0] is the domain-tagged hash
+// of the empty leaf (commitment = 0); zeros[i+1] is the internal-node hash
+// of two zeros[i] children.
 let zeroCache: string[] | null = null;
 
 // Cache for the Poseidon hash function instance (expensive to initialize)
@@ -30,7 +42,8 @@ async function getZeroHashes(): Promise<string[]> {
   if (zeroCache) return zeroCache;
 
   const poseidon = await getPoseidon();
-  const zeros: string[] = ["0"];
+  // zeros[0]: domain-tagged hash of the empty leaf (commitment 0).
+  const zeros: string[] = [poseidon.F.toString(poseidon([LEAF_DOMAIN, 0n]))];
 
   for (let i = 0; i < TREE_DEPTH; i++) {
     const prev = BigInt(zeros[i]);
@@ -40,6 +53,15 @@ async function getZeroHashes(): Promise<string[]> {
 
   zeroCache = zeros;
   return zeros;
+}
+
+/**
+ * Domain-tags a raw leaf commitment the same way the circuit's
+ * `leafHasher` does: Poseidon(LEAF_DOMAIN, commitment).
+ */
+async function hashLeaf(commitment: string): Promise<string> {
+  const poseidon = await getPoseidon();
+  return poseidon.F.toString(poseidon([LEAF_DOMAIN, BigInt(commitment)]));
 }
 
 /**
@@ -62,8 +84,11 @@ export async function computeMerklePath(
   const pathElements: string[] = [];
   const pathIndices: number[] = [];
 
-  // Build tree level by level
-  let currentLevel = [...leaves];
+  // Build tree level by level. Level 0 is the domain-tagged leaf hashes
+  // (matching the circuit's `leafHasher`), not the raw commitments —
+  // pathElements[0] must be a sibling's *hashed* leaf, since the circuit
+  // compares against currentHash[0], which is already leaf-domain-tagged.
+  let currentLevel = await Promise.all(leaves.map(hashLeaf));
   let currentIndex = leafIndex;
 
   for (let level = 0; level < TREE_DEPTH; level++) {
@@ -138,11 +163,11 @@ export async function getMerklePath(
   daoId: number,
   publicKey: string,
 ): Promise<{ pathElements: string[]; pathIndices: number[] }> {
-  // Initialize contract clients
-  const clients = initializeContractClients(publicKey);
+  // Unified client
+  const client = getZkVoteClient(publicKey);
 
   // Call the on-chain get_merkle_path function
-  const result = await clients.membershipTree.get_merkle_path({
+  const result = await client.membershipTree.get_merkle_path({
     dao_id: BigInt(daoId),
     leaf_index: leafIndex,
   });

@@ -33,10 +33,7 @@ export function metricsMiddleware(
 
   // Capture the original end/finish to measure response
   const originalEnd = res.end;
-  res.end = function (
-    this: Response,
-    ...args: Parameters<typeof originalEnd>
-  ) {
+  res.end = function (this: Response, ...args: Parameters<typeof originalEnd>) {
     const duration = Number(process.hrtime.bigint() - start) / 1e9;
     const status = String(res.statusCode);
 
@@ -45,7 +42,7 @@ export function metricsMiddleware(
 
     // Track response body size
     const resContentLength = parseInt(
-      res.getHeader("content-length") as string || "0",
+      (res.getHeader("content-length") as string) || "0",
       10,
     );
     if (resContentLength > 0) {

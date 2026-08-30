@@ -22,7 +22,11 @@ export function LanguageSwitcher() {
           aria-label={t("language.select")}
         >
           {LANGUAGES.map((lang) => (
-            <option key={lang.code} value={lang.code} className="bg-background text-foreground">
+            <option
+              key={lang.code}
+              value={lang.code}
+              className="bg-background text-foreground"
+            >
               {lang.flag} {lang.name}
             </option>
           ))}

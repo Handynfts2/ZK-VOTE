@@ -10,6 +10,7 @@ const setupApp = async () => {
   process.env.RELAYER_SECRET_KEY = TEST_SECRET;
   process.env.VOTING_CONTRACT_ID = 'C'.padEnd(56, 'A');
   process.env.TREE_CONTRACT_ID = 'C'.padEnd(56, 'B');
+  process.env.COMMENTS_CONTRACT_ID = 'C'.padEnd(56, 'D');
   process.env.SOROBAN_RPC_URL = 'http://localhost';
   process.env.CORS_ORIGIN = 'http://localhost'; // CSRF middleware fails-closed on wildcard CORS
   process.env.NETWORK_PASSPHRASE = 'Test';
@@ -108,7 +109,7 @@ test('vote rejects U256 values above BN254 modulus', async () => {
       choice: true,
       nullifier: tooBig,
       root: '01'.repeat(32), // 64 hex chars
-      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '33'.repeat(64) },
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
     });
   assert.equal(res.statusCode, 400);
   // Zod returns 'Validation failed' with details mentioning 'BN254 field modulus'
@@ -154,9 +155,65 @@ test('generic errors hide message when RELAYER_GENERIC_ERRORS=true', async () =>
       choice: true,
       nullifier: '0xz', // malformed
       root: '0x01',
-      proof: { a: '0x' + '11'.repeat(64), b: '0x' + '22'.repeat(128), c: '0x' + '33'.repeat(64) },
+      proof: { a: '0x' + '11'.repeat(64), b: '0x' + '22'.repeat(128), c: '0x' + '05'.repeat(64) },
     });
   assert.equal(res.statusCode, 400);
   assert.ok(res.body.error);
   assert.equal(res.body.message, undefined);
+});
+
+// ============================================================
+// Idempotency tests (issue #279)
+// ============================================================
+
+test('duplicate nullifier in pending state returns 202 with Retry-After header', async () => {
+  const { insertVoteSubmission } = await import('../src/services/db.ts');
+
+  // Seed a pending submission before the request arrives
+  const nullifier = '01'.repeat(32); // 64 hex chars, valid U256
+  insertVoteSubmission(nullifier);
+
+  const app = await setupApp();
+  const res = await request(app)
+    .post('/vote')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      daoId: 1,
+      proposalId: 1,
+      choice: true,
+      nullifier,
+      root: '01'.repeat(32),
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
+    });
+
+  assert.equal(res.statusCode, 202);
+  assert.ok(res.headers['retry-after'], 'Should set Retry-After header');
+  assert.equal(res.body.status, 'PENDING');
+});
+
+test('duplicate nullifier in confirmed state returns 200 with original txHash', async () => {
+  const { insertVoteSubmission, updateVoteSubmission } = await import('../src/services/db.ts');
+
+  const nullifier = '02'.repeat(32);
+  const txHash = 'abc123def456';
+  insertVoteSubmission(nullifier);
+  updateVoteSubmission(nullifier, 'confirmed', txHash);
+
+  const app = await setupApp();
+  const res = await request(app)
+    .post('/vote')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      daoId: 1,
+      proposalId: 1,
+      choice: true,
+      nullifier,
+      root: '01'.repeat(32),
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
+    });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.txHash, txHash);
+  assert.equal(res.body.replayed, true);
 });

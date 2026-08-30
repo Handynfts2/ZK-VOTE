@@ -545,28 +545,28 @@ export function printMigrationStatus(database: DatabaseType): void {
   const status = getMigrationStatus(database);
 
   if (status.length === 0) {
-    console.log("No migrations found.");
+    console.info("No migrations found.");
     return;
   }
 
-  console.log("\nMigration Status:");
-  console.log("-".repeat(100));
-  console.log(
+  console.info("\nMigration Status:");
+  console.info("-".repeat(100));
+  console.info(
     "  ID    │ Name                                    │ Applied │ Checksum │ Duration ",
   );
-  console.log("-".repeat(100));
+  console.info("-".repeat(100));
 
   for (const m of status) {
     const applied = m.applied ? "✓" : "✗";
     const checksumOk =
       m.checksum_match === null ? "—" : m.checksum_match ? "✓" : "✗";
     const duration = m.applied_at ? `${m.applied_at}` : "—";
-    console.log(
+    console.info(
       `  ${m.id.padEnd(5)}│ ${m.name.padEnd(39)}│ ${applied.padEnd(7)} │ ${checksumOk.padEnd(8)} │ ${duration}`,
     );
   }
-  console.log("-".repeat(100));
-  console.log(
+  console.info("-".repeat(100));
+  console.info(
     `\n${status.filter((m) => m.applied).length}/${status.length} migrations applied.`,
   );
 }
@@ -608,10 +608,10 @@ async function cli(): Promise<void> {
         const target = args[1] === "--target" ? args[2] : undefined;
         const results = migrateUp(database, { target });
         if (results.length === 0) {
-          console.log("Already at latest migration.");
+          console.info("Already at latest migration.");
         } else {
           for (const r of results) {
-            console.log(
+            console.info(
               `  ${r.success ? "✓" : "✗"} ${r.direction} ${r.id}: ${r.durationMs.toFixed(0)}ms${r.error ? ` — ${r.error}` : ""}`,
             );
           }
@@ -623,10 +623,10 @@ async function cli(): Promise<void> {
         const target = allFlag ? "000" : undefined;
         const results = migrateDown(database, { target });
         if (results.length === 0) {
-          console.log("Nothing to roll back.");
+          console.info("Nothing to roll back.");
         } else {
           for (const r of results) {
-            console.log(
+            console.info(
               `  ${r.success ? "✓" : "✗"} ${r.direction} ${r.id}: ${r.durationMs.toFixed(0)}ms${r.error ? ` — ${r.error}` : ""}`,
             );
           }
@@ -634,10 +634,10 @@ async function cli(): Promise<void> {
         break;
       }
       case "dry-run": {
-        console.log("\n=== DRY RUN — No changes will be made ===\n");
+        console.info("\n=== DRY RUN — No changes will be made ===\n");
         const results = migrateUp(database, { dryRun: true });
         if (results.length === 0) {
-          console.log("No pending migrations to apply.");
+          console.info("No pending migrations to apply.");
         }
         break;
       }

@@ -1,0 +1,16 @@
+{
+  "name": "zkvote-prover",
+  "type": "module",
+  "description": "Rust BN254 Groth16 prover + circomlib-compatible Poseidon for ZKVote (WASM-ready)",
+  "version": "0.1.0",
+  "files": [
+    "zkvote_prover_bg.wasm",
+    "zkvote_prover.js",
+    "zkvote_prover.d.ts"
+  ],
+  "main": "zkvote_prover.js",
+  "types": "zkvote_prover.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

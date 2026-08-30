@@ -58,6 +58,8 @@ jobs:
         run: npm ci --legacy-peer-deps
       - name: Type check
         run: npm run type-check
+      - name: Drift guard
+        run: npm run drift:check
       - name: Lint (includes JSDoc validation)
         run: npm run lint
       - name: Format check
@@ -90,8 +92,8 @@ jobs:
         run: npx prettier --check "src/**/*.ts"
       - name: Validate environment profiles
         run: npm run validate-profiles
-      - name: Run tests
-        run: npm test
+      - name: Run tests (including .test.ts files)
+        run: npm test 2>&1 | tee test-output.log
         env:
           RELAYER_TEST_MODE: 'true'
           SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
@@ -101,6 +103,17 @@ jobs:
           VOTING_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           TREE_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           COMMENTS_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+      - name: Report test counts
+        if: always()
+        run: |
+          echo "=== Backend Test Summary ==="
+          echo "TypeScript tests (.test.ts):"
+          find test tests -name "*.test.ts" -type f | wc -l
+          echo "JavaScript tests (.test.js):"
+          find test -name "*.test.js" -type f | wc -l
+          echo ""
+          echo "Test execution log:"
+          tail -20 test-output.log || echo "No test output"
       - name: Check OpenAPI spec and API.md are up to date
         run: npm run docs:check
         env:
@@ -130,6 +143,24 @@ jobs:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: circuits/package-lock.json
+
+      # Cache compiled circuits to speed up CI
+      - name: Cache circuit compilation artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            circuits/build
+            circuits/build_v2
+            circuits/.cache
+          key: circuits-${{ runner.os }}-${{ hashFiles('circuits/**/*.circom', 'circuits/package-lock.json') }}
+          restore-keys: |
+            circuits-${{ runner.os }}-
+
+      - name: Install circom
+        run: |
+          wget -q https://github.com/iden3/circom/releases/download/v2.1.8/circom-linux-amd64 -O /tmp/circom
+          sudo mv /tmp/circom /usr/local/bin/circom
+          sudo chmod +x /usr/local/bin/circom
       - name: Install dependencies
         run: npm ci
       - name: Run tests

@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   type DAOMetadata,
   getImageUrl,
   getTwitterUrl,
+  isValidHexColor,
 } from "../lib/daoMetadata";
 import { Badge, LoadingSpinner } from "./ui";
 import { Button } from "./ui/Button";
@@ -379,8 +380,24 @@ export default function DAOHeader({
   const [showDescription, setShowDescription] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Issue #389: per-DAO accent color, exposed as a CSS custom property so
+  // any descendant can opt into branded styling. Re-validated here (not just
+  // trusted from upload-time validation in daoMetadata.ts) since this value
+  // is injected into a `style` attribute — only a strict 6-digit hex string
+  // is ever allowed through.
+  const themeColor =
+    metadata?.themeColor && isValidHexColor(metadata.themeColor)
+      ? metadata.themeColor
+      : undefined;
+
   return (
-    <Card>
+    <Card
+      style={
+        themeColor
+          ? ({ "--dao-accent": themeColor } as CSSProperties)
+          : undefined
+      }
+    >
       <CardContent className="pt-6">
         {/* Cover Image with Profile Photo and Social Links overlay */}
         {metadata?.coverImageCid && (
@@ -430,7 +447,10 @@ export default function DAOHeader({
           {/* Left: DAO name, badges, and ID */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap mb-2">
-              <h2 className="text-2xl font-bold tracking-tight text-foreground">
+              <h2
+                className={`text-2xl font-bold tracking-tight ${themeColor ? "" : "text-foreground"}`}
+                style={themeColor ? { color: "var(--dao-accent)" } : undefined}
+              >
                 {dao.name}
               </h2>
               {dao.isAdmin ? (

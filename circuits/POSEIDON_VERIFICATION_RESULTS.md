@@ -127,11 +127,39 @@ done
 
 ## Zero Leaf Consistency
 
-Both implementations use **zero (0)** as the empty leaf value:
+Both implementations use **zero (0)** as the raw empty-leaf commitment:
 - **Circomlib**: `zeros[0] = 0`
 - **On-chain**: `zero_value() = U256::from_u32(0)`
 
-This is critical for Merkle tree compatibility. ✅ Verified.
+This is the underlying `hash_pair`/Poseidon(2) parameter parity verified
+above, which is unaffected by the domain-separation change below — `Poseidon(a, b)`
+itself did not change.
+
+## Addendum (#167): Leaf Domain Separation
+
+**This section was added after the run above and describes new behavior —
+it has not itself been re-verified on-chain.**
+
+The tree no longer inserts the raw empty-leaf value (`0`) or a raw
+commitment directly as a tree node. Every leaf is now hashed with a fixed
+tag before entering the tree — `leafHash = Poseidon(LEAF_DOMAIN, leaf)` with
+`LEAF_DOMAIN = 1` — closing a second-preimage hole where a forged
+internal-node hash could be presented as a fake leaf. This changes the
+tree's actual `zeros[0]` (see `POSEIDON_KAT.md`'s "Domain-Separated Leaf
+Hashing" section for the regenerated chain) and is implemented in:
+- `circuits/merkle_tree.circom` (`leafHasher = Poseidon(2)` with
+  `[LEAF_DOMAIN, leaf]`)
+- `frontend/src/lib/merkletree.ts` (`hashLeaf()`, `getZeroHashes()`)
+- `contracts/membership-tree/src/lib.rs` (`hash_leaf()`, used in
+  `insert_leaf`, `update_leaf`, `get_merkle_path`, and the zeros caches)
+
+The `test_leaf_is_domain_separated_before_tree_insertion` test in
+`contracts/membership-tree/src/test.rs` confirms the on-chain root is
+reproducible off-chain using this domain-tagged leaf hash. **Before mainnet
+deployment, re-run the on-chain `test_poseidon_hash(1, <commitment>, "BN254")`
+check from `POSEIDON_KAT.md` against a deployed instance of the updated
+contract** to reconfirm parameter parity for the new leaf-hashing calls —
+this report only reflects results from before that change existed.
 
 ## References
 

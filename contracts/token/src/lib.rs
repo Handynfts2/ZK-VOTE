@@ -3,7 +3,6 @@
 mod allowance;
 
 use allowance::{is_allowance_expired, read_allowance, read_allowance_amount, write_allowance};
-use soroban_sdk::xdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     Bytes, BytesN, Env, String, Vec,
@@ -23,6 +22,14 @@ const PERSISTENT_TTL_EXTEND: u32 = 535_680;
 
 const CLAWBACK_DELAY_LEDGERS: u32 = 34_560;
 const CLAWBACK_PERIOD_LEDGERS: u32 = 5_184_000;
+
+// Issue #110: batch operations. Soroban enforces per-transaction CPU
+// instruction and read/write-entry limits; a single batch call must not
+// exceed those. 50 is a conservative starting point — see the
+// `bench_batch_transfer_cost_scaling` test below, which prints actual CPU
+// instructions consumed per batch size so this can be tuned against real
+// mainnet resource limits rather than guessed.
+const MAX_BATCH_SIZE: u32 = 50;
 
 #[contracterror]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -46,6 +53,10 @@ pub enum TokenError {
     InvalidSignature = 17,
     PermitExpired = 18,
     PermitReplay = 19,
+    SupplyCapExceeded = 20,
+    SelfDelegation = 21,
+    BatchTooLarge = 22,
+    EmptyBatch = 23,
 }
 
 #[contracttype]
@@ -74,8 +85,10 @@ pub enum DataKey {
     ClawbackPeriodStart,
     ClawbackPeriodLimit,
     Nonce(Address),
+    MaxSupply,
     Checkpoints(Address),
     CheckpointRetention,
+    Delegate(Address),
 }
 
 #[soroban_sdk::contractevent]
@@ -102,9 +115,26 @@ pub struct TransferEvent {
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MintEvent {
+    // Issue #111: SEP-41 defines mint topics as ["mint", admin, to] — `admin`
+    // was previously missing entirely, so indexers couldn't attribute a mint
+    // to the admin who authorized it.
+    #[topic]
+    pub admin: Address,
     #[topic]
     pub to: Address,
     pub amount: i128,
+}
+
+// Issue #101 (phase 1): pure delegation registry. Emitted whenever a holder
+// changes or clears who they delegate to. This does NOT yet feed into
+// voting power — see `delegate`/`undelegate`/`get_delegate` doc comments.
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DelegateChanged {
+    #[topic]
+    pub delegator: Address,
+    pub from_delegatee: Option<Address>,
+    pub to_delegatee: Option<Address>,
 }
 
 #[soroban_sdk::contractevent]
@@ -304,10 +334,13 @@ impl Token {
             if last.ledger_sequence == ledger {
                 // Update the last checkpoint in-place
                 let len = checkpoints.len();
-                checkpoints.set(len - 1, Checkpoint {
-                    ledger_sequence: ledger,
-                    balance,
-                });
+                checkpoints.set(
+                    len - 1,
+                    Checkpoint {
+                        ledger_sequence: ledger,
+                        balance,
+                    },
+                );
                 env.storage().persistent().set(&cp_key, &checkpoints);
                 Self::bump_persistent(env, &cp_key);
                 return;
@@ -321,8 +354,8 @@ impl Token {
 
         // Prune old checkpoints beyond retention period
         let retention = Self::get_checkpoint_retention(env);
-        if retention > 0 && checkpoints.len() > retention as u32 {
-            let prune_count = checkpoints.len() - retention as u32;
+        if retention > 0 && checkpoints.len() > retention {
+            let prune_count = checkpoints.len() - retention;
             let mut pruned = Vec::new(env);
             for i in prune_count..checkpoints.len() {
                 if let Some(cp) = checkpoints.get(i) {
@@ -710,7 +743,32 @@ impl Token {
         .publish(&env);
     }
 
+    // ── Supply cap helpers (Issue #98) ──────────────────────────────────────
+
+    fn get_max_supply_storage(env: &Env) -> Option<i128> {
+        env.storage().persistent().get(&DataKey::MaxSupply)
+    }
+
     // ── Admin: Mint ─────────────────────────────────────────────────────────
+
+    pub fn set_max_supply(env: Env, max_supply: i128) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        if max_supply < 0 {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        let key = DataKey::MaxSupply;
+        env.storage().persistent().set(&key, &max_supply);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_max_supply(env: Env) -> Option<i128> {
+        Self::bump_instance(&env);
+        Self::get_max_supply_storage(&env)
+    }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
         let admin: Address = Self::admin(env.clone());
@@ -721,10 +779,20 @@ impl Token {
             panic_with_error!(&env, TokenError::InvalidAmount);
         }
 
+        if let Some(cap) = Self::get_max_supply_storage(&env) {
+            let current = Self::get_supply(&env);
+            let new_supply = current.checked_add(amount).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+            if new_supply > cap {
+                panic_with_error!(&env, TokenError::SupplyCapExceeded);
+            }
+        }
+
         Self::receive_balance(&env, &to, amount);
         Self::increment_supply(&env, amount);
 
-        MintEvent { to, amount }.publish(&env);
+        MintEvent { admin, to, amount }.publish(&env);
     }
 
     pub fn version(env: Env) -> u32 {
@@ -1087,15 +1155,23 @@ impl Token {
         new
     }
 
-    fn address_to_32bytes(address: &Address) -> [u8; 32] {
-        let sc_addr: xdr::ScAddress = address.clone().into();
-        match sc_addr {
-            xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
-                xdr::Uint256(bytes),
-            ))) => bytes,
-            xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(bytes))) => bytes,
-            _ => panic!("unsupported address type"),
+    fn address_to_32bytes(env: &Env, address: &Address) -> [u8; 32] {
+        use soroban_sdk::xdr::ToXdr;
+        let xdr_bytes = address.to_xdr(env);
+        let mut buf = [0u8; 64];
+        let len = xdr_bytes.len() as usize;
+        xdr_bytes.copy_into_slice(&mut buf[..len]);
+        let mut key = [0u8; 32];
+        if len == 44 {
+            // Account address: ScVal::Address(ScAddress::Account(Uint256))
+            key.copy_from_slice(&buf[12..44]);
+        } else if len == 40 {
+            // Contract address: ScVal::Address(ScAddress::Contract(Hash))
+            key.copy_from_slice(&buf[8..40]);
+        } else {
+            panic!("unsupported address XDR length");
         }
+        key
     }
 
     fn build_permit_digest(
@@ -1106,9 +1182,9 @@ impl Token {
         nonce: u32,
         deadline: u64,
     ) -> Bytes {
-        let contract_key = Self::address_to_32bytes(&env.current_contract_address());
-        let owner_key = Self::address_to_32bytes(owner);
-        let spender_key = Self::address_to_32bytes(spender);
+        let contract_key = Self::address_to_32bytes(env, &env.current_contract_address());
+        let owner_key = Self::address_to_32bytes(env, owner);
+        let spender_key = Self::address_to_32bytes(env, spender);
 
         let mut data = Bytes::new(env);
         data.extend_from_slice(&contract_key);
@@ -1149,7 +1225,7 @@ impl Token {
         let nonce = Self::get_nonce(&env, &owner);
         let digest = Self::build_permit_digest(&env, &owner, &spender, amount, nonce, deadline);
 
-        let owner_key_bytes = Self::address_to_32bytes(&owner);
+        let owner_key_bytes = Self::address_to_32bytes(&env, &owner);
         let pk = BytesN::from_array(&env, &owner_key_bytes);
 
         env.crypto().ed25519_verify(&pk, &digest, &signature);
@@ -1199,6 +1275,242 @@ impl Token {
             amount,
         }
         .publish(&env);
+    }
+
+    // ── Storage TTL (Issue #112) ────────────────────────────────────────────
+    //
+    // Admin/name/symbol/decimals already live in instance storage (see
+    // `initialize`), and allowance TTL already tracks `expiration_ledger`
+    // (see `allowance.rs::write_allowance`) — both were already correct
+    // before this change. What was missing: balances only get their
+    // persistent TTL extended as a side effect of a transfer/mint/burn
+    // touching that address. A holder who wants to keep their balance alive
+    // without transacting (e.g. to outlast the archival threshold) had no
+    // way to do that. This adds that self-serve renewal.
+
+    /// Extend the caller's own balance entry TTL without moving any funds.
+    /// No-op (does not error) if the caller has no balance entry yet.
+    pub fn extend_balance_ttl(env: Env, id: Address) {
+        id.require_auth();
+        let key = DataKey::Balance(id);
+        if env.storage().persistent().has(&key) {
+            Self::bump_persistent(&env, &key);
+        }
+    }
+
+    // ── Vote delegation registry (Issue #101, phase 1) ──────────────────────
+    //
+    // This is intentionally scoped down from the full proposal in #101.
+    // Correct *effective voting power* has to stay in sync with every
+    // balance-changing call (transfer/mint/burn/clawback) — the same
+    // problem `Checkpoints` already solves for balances (see
+    // `create_checkpoint`, issue #106). Wiring delegation into that hot
+    // path, plus transitive-delegation cycle detection, plus the voting
+    // contract's eligibility snapshot, is real, security-sensitive surgery
+    // that deserves its own careful PR and tests rather than being rushed
+    // in alongside three other issues. What ships here is the safe,
+    // additive part: a delegator -> delegatee registry that the voting
+    // power computation can be built on top of next. `get_delegate`/
+    // `delegate`/`undelegate` do not currently affect `balance_of` or any
+    // voting contract's eligibility check.
+    pub fn delegate(env: Env, delegator: Address, delegatee: Address) {
+        delegator.require_auth();
+        if delegator == delegatee {
+            panic_with_error!(&env, TokenError::SelfDelegation);
+        }
+        Self::bump_instance(&env);
+
+        let key = DataKey::Delegate(delegator.clone());
+        let previous: Option<Address> = env.storage().persistent().get(&key);
+        env.storage().persistent().set(&key, &delegatee);
+        Self::bump_persistent(&env, &key);
+
+        DelegateChanged {
+            delegator,
+            from_delegatee: previous,
+            to_delegatee: Some(delegatee),
+        }
+        .publish(&env);
+    }
+
+    pub fn undelegate(env: Env, delegator: Address) {
+        delegator.require_auth();
+        Self::bump_instance(&env);
+
+        let key = DataKey::Delegate(delegator.clone());
+        let previous: Option<Address> = env.storage().persistent().get(&key);
+        if previous.is_none() {
+            return;
+        }
+        env.storage().persistent().remove(&key);
+
+        DelegateChanged {
+            delegator,
+            from_delegatee: previous,
+            to_delegatee: None,
+        }
+        .publish(&env);
+    }
+
+    /// Returns the address `holder` currently delegates to, or `None` if
+    /// they have not delegated (i.e. they vote with their own balance).
+    pub fn get_delegate(env: Env, holder: Address) -> Option<Address> {
+        Self::bump_instance(&env);
+        env.storage().persistent().get(&DataKey::Delegate(holder))
+    }
+
+    // ── Batch Operations (Issue #110) ───────────────────────────────────────
+    //
+    // Soroban already guarantees whole-invocation atomicity at the host
+    // level (a panic anywhere reverts every storage write made during that
+    // call) — these functions don't need to invent atomicity themselves.
+    // What they add on top of that guarantee: an explicit up-front
+    // validation pass (so a batch fails fast with one clear error instead
+    // of failing partway through on whichever item happens to run out of
+    // balance/allowance first), a hard batch-size cap (DoS/resource-limit
+    // guard), and one event per item so indexers see the same event shape
+    // they'd see from `MAX_BATCH_SIZE` individual calls.
+
+    /// Batch transfer: `from` sends multiple (recipient, amount) pairs in
+    /// one call. Validates every pair and the total against `from`'s
+    /// current balance before moving any funds.
+    pub fn batch_transfer(env: Env, from: Address, transfers: Vec<(Address, i128)>) {
+        from.require_auth();
+        Self::bump_instance(&env);
+
+        let len = transfers.len();
+        if len == 0 {
+            panic_with_error!(&env, TokenError::EmptyBatch);
+        }
+        if len > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TokenError::BatchTooLarge);
+        }
+
+        // ── Validate all parameters before executing any ───────────────────
+        let mut total: i128 = 0;
+        for (_, amount) in transfers.iter() {
+            if amount < 0 {
+                panic_with_error!(&env, TokenError::InvalidAmount);
+            }
+            total = total.checked_add(amount).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+        }
+
+        let balance_key = DataKey::Balance(from.clone());
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        if current_balance < total {
+            panic_with_error!(&env, TokenError::InsufficientBalance);
+        }
+
+        // ── Execute, emitting one event per item ────────────────────────────
+        for (to, amount) in transfers.iter() {
+            Self::xfer(&env, &from, &to, amount);
+            TransferEvent {
+                from: from.clone(),
+                to: to.clone(),
+                amount,
+            }
+            .publish(&env);
+        }
+    }
+
+    /// Batch mint (airdrops): admin mints multiple (recipient, amount)
+    /// pairs in one call. Validates the total against the supply cap (if
+    /// set) before minting any.
+    pub fn batch_mint(env: Env, mints: Vec<(Address, i128)>) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let len = mints.len();
+        if len == 0 {
+            panic_with_error!(&env, TokenError::EmptyBatch);
+        }
+        if len > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TokenError::BatchTooLarge);
+        }
+
+        // ── Validate all parameters before executing any ───────────────────
+        let mut total: i128 = 0;
+        for (_, amount) in mints.iter() {
+            if amount < 0 {
+                panic_with_error!(&env, TokenError::InvalidAmount);
+            }
+            total = total.checked_add(amount).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+        }
+
+        if let Some(cap) = Self::get_max_supply_storage(&env) {
+            let current = Self::get_supply(&env);
+            let new_supply = current.checked_add(total).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+            if new_supply > cap {
+                panic_with_error!(&env, TokenError::SupplyCapExceeded);
+            }
+        }
+
+        // ── Execute, emitting one event per item ────────────────────────────
+        for (to, amount) in mints.iter() {
+            Self::receive_balance(&env, &to, amount);
+            Self::increment_supply(&env, amount);
+            MintEvent {
+                admin: admin.clone(),
+                to: to.clone(),
+                amount,
+            }
+            .publish(&env);
+        }
+    }
+
+    /// Batch approve: `from` sets multiple (spender, amount,
+    /// expiration_ledger) allowances in one call. Each entry is validated
+    /// independently (approvals don't move funds, so there's no shared
+    /// "total" to check against a balance) — but the same race-rejection
+    /// rule as `approve` applies per spender.
+    pub fn batch_approve(env: Env, from: Address, approvals: Vec<(Address, i128, u32)>) {
+        from.require_auth();
+        Self::bump_instance(&env);
+
+        let len = approvals.len();
+        if len == 0 {
+            panic_with_error!(&env, TokenError::EmptyBatch);
+        }
+        if len > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TokenError::BatchTooLarge);
+        }
+
+        // ── Validate all parameters before executing any ───────────────────
+        for (spender, amount, _expiration_ledger) in approvals.iter() {
+            if amount < 0 {
+                panic_with_error!(&env, TokenError::NegativeAllowance);
+            }
+            let current = read_allowance_amount(&env, from.clone(), spender.clone());
+            let is_race_rejected = current != 0 && amount != 0 && current != amount;
+            if is_race_rejected {
+                panic_with_error!(&env, TokenError::AllowanceRaceRejected);
+            }
+        }
+
+        // ── Execute, emitting one event per item ────────────────────────────
+        for (spender, amount, expiration_ledger) in approvals.iter() {
+            write_allowance(
+                &env,
+                from.clone(),
+                spender.clone(),
+                amount,
+                expiration_ledger,
+            );
+            ApproveEvent {
+                from: from.clone(),
+                spender: spender.clone(),
+                amount,
+                expiration_ledger,
+            }
+            .publish(&env);
+        }
     }
 }
 

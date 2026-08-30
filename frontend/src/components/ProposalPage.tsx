@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyVoting } from "../lib/readOnlyContracts";
 import { calculateNullifier } from "../lib/zkproof";
 import { getZKCredentials } from "../lib/zk";
@@ -13,11 +13,12 @@ import { Button } from "./ui/Button";
 import { Card, CardContent } from "./ui/Card";
 import { LoadingSpinner } from "./ui";
 import VoteModal from "./VoteModal";
+import ClaimRewards from "./ClaimRewards";
 import CommentSection from "./CommentSection";
 import VoteResults from "./VoteResults";
 import ProposalContent from "./ProposalContent";
 import ProposalHeader from "./ProposalHeader";
-import { Clock, AlertCircle, ArrowLeft, Vote } from "lucide-react";
+import { Clock, AlertCircle, ArrowLeft, Vote, Gift } from "lucide-react";
 
 interface Proposal {
   id: number;
@@ -63,6 +64,7 @@ export default function ProposalPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showVoteModal, setShowVoteModal] = useState(false);
+  const [showClaimModal, setShowClaimModal] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [isProposalNotFound, setIsProposalNotFound] = useState(false);
 
@@ -105,7 +107,7 @@ export default function ProposalPage({
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Contract client types not fully exported
       const votingClient: any = publicKey
-        ? initializeContractClients(publicKey).voting
+        ? getZkVoteClient(publicKey).voting
         : getReadOnlyVoting();
 
       const proposalResult = await votingClient.get_proposal({
@@ -217,6 +219,11 @@ export default function ProposalPage({
 
   const handleVoteComplete = () => {
     setShowVoteModal(false);
+    loadProposal();
+  };
+
+  const handleClaimComplete = () => {
+    setShowClaimModal(false);
     loadProposal();
   };
 
@@ -408,9 +415,9 @@ export default function ProposalPage({
                   isOpen={!isPastDeadline}
                 />
 
-                {/* Vote button */}
-                {hasMembership && !proposal.hasVoted && (
-                  <div className="pt-4 flex justify-end">
+                {/* Vote & Claim buttons */}
+                <div className="pt-4 flex justify-end gap-2">
+                  {hasMembership && !proposal.hasVoted && (
                     <Button
                       onClick={() => setShowVoteModal(true)}
                       disabled={!isRegistered || isPastDeadline}
@@ -431,8 +438,20 @@ export default function ProposalPage({
                         </>
                       )}
                     </Button>
-                  </div>
-                )}
+                  )}
+                  {hasMembership && proposal.hasVoted && publicKey && (
+                    <Button
+                      onClick={() => setShowClaimModal(true)}
+                      disabled={!isRegistered}
+                      variant="outline"
+                      size="sm"
+                      data-testid="claim-rewards-button"
+                    >
+                      <Gift className="w-4 h-4 mr-1.5" />
+                      Claim Reward
+                    </Button>
+                  )}
+                </div>
               </>
             ) : null}
           </CardContent>
@@ -464,6 +483,19 @@ export default function ProposalPage({
           kit={kit}
           onClose={() => setShowVoteModal(false)}
           onComplete={handleVoteComplete}
+        />
+      )}
+
+      {showClaimModal && numericDaoId !== null && proposal && publicKey && (
+        <ClaimRewards
+          daoId={numericDaoId}
+          proposalId={proposal.id}
+          eligibleRoot={proposal.eligibleRoot}
+          voteMode={proposal.voteMode}
+          publicKey={publicKey}
+          kit={kit}
+          onClose={() => setShowClaimModal(false)}
+          onComplete={handleClaimComplete}
         />
       )}
     </>

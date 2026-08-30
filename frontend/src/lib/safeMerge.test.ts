@@ -11,7 +11,9 @@ describe("safeMerge and Prototype Pollution Protections", () => {
   });
 
   it("safeClone strips prototype pollution keys", () => {
-    const malicious = JSON.parse('{"name":"test","__proto__":{"polluted":true}}');
+    const malicious = JSON.parse(
+      '{"name":"test","__proto__":{"polluted":true}}',
+    );
     const cloned = safeClone(malicious);
     expect(cloned.name).toBe("test");
     expect(({} as any).polluted).toBeUndefined();
@@ -19,7 +21,9 @@ describe("safeMerge and Prototype Pollution Protections", () => {
 
   it("safeMerge merges objects safely without prototype pollution", () => {
     const base = { a: 1, nested: { b: 2 } };
-    const malicious = JSON.parse('{"__proto__":{"polluted":true},"nested":{"c":3}}');
+    const malicious = JSON.parse(
+      '{"__proto__":{"polluted":true},"nested":{"c":3}}',
+    );
     const merged = safeMerge(base, malicious);
 
     expect(merged.a).toBe(1);
