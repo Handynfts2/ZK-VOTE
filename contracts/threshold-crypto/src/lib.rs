@@ -48,10 +48,10 @@ pub struct DkgConfig {
 pub enum DataKey {
     Config,
     Participant(Address),
-    ParticipantList,          // Vec<Address>
-    Share(Address),           // U256 share per participant
-    ShareCount,               // u32
-    FinalKey,                 // U256 aggregated key
+    ParticipantList, // Vec<Address>
+    Share(Address),  // U256 share per participant
+    ShareCount,      // u32
+    FinalKey,        // U256 aggregated key
 }
 
 #[contract]
@@ -92,7 +92,9 @@ impl ThresholdCrypto {
         env.storage().instance().set(&CONFIG_KEY, &cfg);
         env.storage().instance().set(&ADMIN_KEY, &admin);
         env.storage().instance().set(&VERSION_KEY, &VERSION);
-        env.storage().persistent().set(&DataKey::ParticipantList, &Vec::<Address>::new(&env));
+        env.storage()
+            .persistent()
+            .set(&DataKey::ParticipantList, &Vec::<Address>::new(&env));
         env.storage().persistent().set(&DataKey::ShareCount, &0u32);
         env.storage().instance().set(&FINALIZED_KEY, &false);
         Self::bump_instance(&env);
@@ -114,7 +116,11 @@ impl ThresholdCrypto {
         if cfg.finalized {
             panic_with_error!(&env, ThresholdError::AlreadyFinalized);
         }
-        if env.storage().persistent().has(&DataKey::Participant(participant.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Participant(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::ParticipantExists);
         }
         let mut list: Vec<Address> = env
@@ -130,7 +136,9 @@ impl ThresholdCrypto {
             .set(&DataKey::Participant(participant.clone()), &true);
         Self::bump_persistent(&env, &DataKey::Participant(participant.clone()));
         list.push_back(participant);
-        env.storage().persistent().set(&DataKey::ParticipantList, &list);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ParticipantList, &list);
     }
 
     /// Submit share (participant only)
@@ -145,10 +153,18 @@ impl ThresholdCrypto {
         if cfg.finalized {
             panic_with_error!(&env, ThresholdError::AlreadyFinalized);
         }
-        if !env.storage().persistent().has(&DataKey::Participant(participant.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Participant(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::NotParticipant);
         }
-        if env.storage().persistent().has(&DataKey::Share(participant.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Share(participant.clone()))
+        {
             panic_with_error!(&env, ThresholdError::AlreadySubmitted);
         }
         if share == U256::from_u32(&env, 0) {
@@ -201,7 +217,11 @@ impl ThresholdCrypto {
         let mut agg = U256::from_u32(&env, 0);
         for i in 0..participants.len() {
             let addr = participants.get(i).unwrap();
-            if let Some(s) = env.storage().persistent().get::<DataKey, U256>(&DataKey::Share(addr)) {
+            if let Some(s) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, U256>(&DataKey::Share(addr))
+            {
                 agg = agg.add(&s);
             }
         }
@@ -255,7 +275,10 @@ impl ThresholdCrypto {
 
     pub fn is_finalized(env: Env) -> bool {
         Self::bump_instance(&env);
-        env.storage().instance().get(&FINALIZED_KEY).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&FINALIZED_KEY)
+            .unwrap_or(false)
     }
 
     pub fn get_final_key(env: Env) -> U256 {
@@ -271,7 +294,10 @@ impl ThresholdCrypto {
 
     pub fn version(env: Env) -> u32 {
         Self::bump_instance(&env);
-        env.storage().instance().get(&VERSION_KEY).unwrap_or(VERSION)
+        env.storage()
+            .instance()
+            .get(&VERSION_KEY)
+            .unwrap_or(VERSION)
     }
 }
 

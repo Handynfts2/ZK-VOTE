@@ -594,8 +594,7 @@ fn test_register_after_cooldown_allowed() {
 
 #[test]
 fn test_registration_cooldown_is_per_member_and_per_dao() {
-    let (env, tree_id, sbt_id, registry_id, admin, member) =
-        register_member(1u64, 111, 1_000_000);
+    let (env, tree_id, sbt_id, registry_id, admin, member) = register_member(1u64, 111, 1_000_000);
     let tree_client = MembershipTreeClient::new(&env, &tree_id);
     let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);

@@ -60,21 +60,21 @@ pub enum TreeError {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    TreeDepth(u64),                // dao_id -> depth
-    NextLeafIndex(u64),            // dao_id -> next index
-    FilledSubtrees(u64),           // dao_id -> Vec<U256>
-    Roots(u64),                    // dao_id -> Vec<U256> (history)
-    LeafIndex(u64, U256),          // (dao_id, commitment) -> index
-    MemberLeafIndex(u64, Address), // (dao_id, member) -> index
-    LeafValue(u64, u32),           // (dao_id, index) -> commitment (or 0 if removed)
-    NextRootIndex(u64),            // dao_id -> next root index counter
-    RootIndex(u64, U256),          // (dao_id, root) -> root index
-    RevokedAt(u64, U256),          // (dao_id, commitment) -> timestamp when revoked
-    ReinstatedAt(u64, U256),       // (dao_id, commitment) -> timestamp when reinstated
-    NodeHash(u64, u32, u32),       // (dao_id, level, node_index) -> hash value at that position
-    MinValidRootIdx(u64),          // dao_id -> minimum valid root index (after member removals)
-    PoseidonField(u64),            // dao_id -> Symbol("BN254") or Symbol("BLS12_381")
-    CommitmentUsed(u64, U256),     // (dao_id, commitment) -> true
+    TreeDepth(u64),                   // dao_id -> depth
+    NextLeafIndex(u64),               // dao_id -> next index
+    FilledSubtrees(u64),              // dao_id -> Vec<U256>
+    Roots(u64),                       // dao_id -> Vec<U256> (history)
+    LeafIndex(u64, U256),             // (dao_id, commitment) -> index
+    MemberLeafIndex(u64, Address),    // (dao_id, member) -> index
+    LeafValue(u64, u32),              // (dao_id, index) -> commitment (or 0 if removed)
+    NextRootIndex(u64),               // dao_id -> next root index counter
+    RootIndex(u64, U256),             // (dao_id, root) -> root index
+    RevokedAt(u64, U256),             // (dao_id, commitment) -> timestamp when revoked
+    ReinstatedAt(u64, U256),          // (dao_id, commitment) -> timestamp when reinstated
+    NodeHash(u64, u32, u32),          // (dao_id, level, node_index) -> hash value at that position
+    MinValidRootIdx(u64),             // dao_id -> minimum valid root index (after member removals)
+    PoseidonField(u64),               // dao_id -> Symbol("BN254") or Symbol("BLS12_381")
+    CommitmentUsed(u64, U256),        // (dao_id, commitment) -> true
     LastRegistrationAt(u64, Address), // (dao_id, member) -> ledger timestamp of last registration (#371)
 }
 
@@ -351,9 +351,7 @@ impl MembershipTree {
     fn enforce_registration_cooldown(env: &Env, dao_id: u64, member: &Address) {
         let key = DataKey::LastRegistrationAt(dao_id, member.clone());
         if let Some(last) = env.storage().persistent().get::<_, u64>(&key) {
-            if env.ledger().timestamp()
-                < last.saturating_add(MIN_REGISTRATION_INTERVAL_SECS)
-            {
+            if env.ledger().timestamp() < last.saturating_add(MIN_REGISTRATION_INTERVAL_SECS) {
                 panic_with_error!(env, TreeError::RateLimited);
             }
         }
@@ -1016,14 +1014,22 @@ impl MembershipTree {
         }
 
         let leaf_index_key = DataKey::LeafIndex(dao_id, commitment.clone());
-        let leaf_value_key = if let Some(index) = env.storage().persistent().get::<_, Option<u32>>(&leaf_index_key) {
+        let leaf_value_key = if let Some(index) = env
+            .storage()
+            .persistent()
+            .get::<_, Option<u32>>(&leaf_index_key)
+        {
             Some(DataKey::LeafValue(dao_id, index.unwrap_or(0)))
         } else {
             None
         };
 
         if let Some(key) = leaf_value_key {
-            let current_value: U256 = env.storage().persistent().get(&key).unwrap_or_else(|| U256::from_u32(&env, 0));
+            let current_value: U256 = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or_else(|| U256::from_u32(&env, 0));
             current_value == Self::zero_value(&env)
         } else {
             true
