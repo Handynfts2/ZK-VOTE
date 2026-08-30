@@ -11,10 +11,7 @@ members = [
     "contracts/bridge/soroban",
     "contracts/circuit-registry",
     "contracts/token",
-    "contracts/vdf",
-    "crates/nova-aggregator",
     "contracts/threshold-crypto",
-    "contracts/rewards",
     "tests/integration",
 ]
 default-members = [
