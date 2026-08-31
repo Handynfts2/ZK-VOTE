@@ -10,6 +10,22 @@ export { csrfGuard, csrfTokenMiddleware } from "./csrf.js";
 export { requestLogger } from "./logging.js";
 export { errorHandler } from "./errorHandler.js";
 export {
+  auditMiddleware,
+  redactPii,
+  redactBody,
+  appendAudit,
+  queryAuditLogs,
+  getAllAuditLogs,
+  exportAuditLogs,
+  clearAuditLog,
+  isIdempotencyKeyUsed,
+  markIdempotencyKey,
+  deriveActor,
+  auditAction,
+  REDACTED,
+  SENSITIVE_FIELDS,
+} from "./audit.js";
+export {
   voteLimiter,
   walletRateLimiter,
   queryLimiter,
