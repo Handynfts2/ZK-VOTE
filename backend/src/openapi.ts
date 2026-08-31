@@ -2,8 +2,8 @@
  * OpenAPI 3.1 Specification Builder
  *
  * Builds the API's OpenAPI document from the same Zod schemas used to
- * validate requests at runtime (validation/schemas.ts and a couple of
- * route-local schemas), plus a compact per-endpoint metadata table below.
+ * validate requests at runtime (all centralized in validation/schemas.ts),
+ * plus a compact per-endpoint metadata table below.
  * That table is also the source `scripts/generate-openapi.ts` uses to check
  * API.md doesn't drift from the implemented routes — see that script for how
  * the two stay in sync.
@@ -24,9 +24,9 @@ import {
   flagCommentSchema,
   manualEventSchema,
   notifyEventSchema,
+  bridgeVoteSchema,
+  circuitParamsSchema,
 } from "./validation/schemas.js";
-import { bridgeVoteSchema } from "./routes/bridge.js";
-import { circuitParamsSchema } from "./routes/circuits.js";
 
 extendZodWithOpenApi(z);
 
@@ -281,359 +281,124 @@ export const ENDPOINTS: EndpointDef[] = [
       data: [],
       pagination: { cursor: undefined, hasMore: false, total: 0 },
     },
-    responseSchema: paginatedResponseSchema,
   },
-  {
-    method: "get",
-    path: "/comment/:daoId/:proposalId/:commentId",
-    tag: "Comments",
-    summary: "Get a single comment",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: {
-      daoId: idParam("0", "DAO identifier"),
-      proposalId: idParam("1", "Proposal identifier"),
-      commentId: idParam("42", "Comment identifier"),
+  paths: {
+    "/vote": {
+      post: {
+        summary: "Submit anonymous vote (audited)",
+        security: [{ relayerAuth: [] }],
+        requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/VoteRequest" } } } },
+        responses: { "200": { description: "Vote submitted" }, "401": { description: "Unauthorized" } },
+        "x-audited": true,
+        "x-redacted-fields": ["nullifier", "root", "proof"],
+      },
     },
-    responseExample: {
-      id: 42,
-      daoId: 0,
-      proposalId: 1,
-      contentCid: "bafy...",
-      isAnonymous: true,
+    "/comment/anonymous": {
+      post: {
+        summary: "Anonymous comment (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+        "x-redacted-fields": ["nullifier", "root", "proof"],
+      },
     },
-    errorStatuses: [404],
-  },
-  {
-    method: "post",
-    path: "/comment/edit",
-    tag: "Comments",
-    summary: "Edit a public (non-anonymous) comment",
-    auth: true,
-    rateLimit: "commentLimiter",
-    body: editCommentSchema,
-    responseExample: { success: true, txHash: "a1b2c3...64hex" },
-    responseSchema: successResponseSchema,
-    errorStatuses: [400, 401, 403, 500, 503],
-  },
-  {
-    method: "post",
-    path: "/comment/delete",
-    tag: "Comments",
-    summary: "Delete a public (non-anonymous) comment",
-    auth: true,
-    rateLimit: "commentLimiter",
-    body: deleteCommentSchema,
-    responseExample: { success: true, txHash: "a1b2c3...64hex" },
-    responseSchema: successResponseSchema,
-    errorStatuses: [400, 401, 403, 500, 503],
-  },
-  {
-    method: "post",
-    path: "/comment/flag",
-    tag: "Comments",
-    summary: "Flag a comment as spam (anti-spam, auto-hide at threshold)",
-    auth: true,
-    rateLimit: "commentLimiter",
-    body: flagCommentSchema,
-    responseExample: {
-      success: true,
-      hidden: false,
-      flagCount: 1,
-      threshold: 3,
+    "/comment/edit": {
+      post: {
+        summary: "Edit comment (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    errorStatuses: [400, 401, 500],
-  },
-  // ---- DAOs ----
-  {
-    method: "get",
-    path: "/daos",
-    tag: "DAOs",
-    summary:
-      "List cached DAOs with pagination, optionally including user membership role",
-    auth: false,
-    rateLimit: "queryLimiter",
-    query: {
-      user: z
-        .string()
-        .optional()
-        .openapi({ example: "GABCDEF...", description: "Stellar address" }),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
-        .optional()
-        .openapi({ example: 100, description: "Page size (default 100)" }),
-      offset: z
-        .number()
-        .int()
-        .min(0)
-        .optional()
-        .openapi({ example: 0, description: "Rows to skip (default 0)" }),
-      cursor: z.string().optional().openapi({
-        example: "100",
-        description:
-          "Opaque cursor from a previous pagination.cursor; alias for offset",
-      }),
+    "/comment/delete": {
+      post: {
+        summary: "Delete comment (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    responseExample: {
-      data: [],
-      pagination: { cursor: undefined, hasMore: false, total: 0 },
-      lastSync: null,
-      cached: true,
+    "/bridge/vote": {
+      post: {
+        summary: "Bridge vote (audited)",
+        "x-audited": true,
+        "x-redacted-fields": ["nullifier", "voteRoot", "sbtRoot", "proof"],
+      },
     },
-    responseSchema: daosListResponseSchema,
-    errorStatuses: [400, 500],
-  },
-  {
-    method: "get",
-    path: "/dao/:daoId",
-    tag: "DAOs",
-    summary: "Get a single cached DAO",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: { daoId: idParam("0", "DAO identifier") },
-    responseExample: {
-      dao: { id: 0, name: "Example DAO", creator: "GABCDEF..." },
-      cached: true,
+    "/bridge/relay": {
+      post: {
+        summary: "Manual relay (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    errorStatuses: [404],
-  },
-  {
-    method: "post",
-    path: "/daos/sync",
-    tag: "DAOs",
-    summary: "Trigger a manual DAO sync from the on-chain registry",
-    auth: true,
-    rateLimit: null,
-    responseExample: { success: true, synced: 5 },
-    errorStatuses: [401, 500],
-  },
-  // ---- IPFS ----
-  {
-    method: "get",
-    path: "/ipfs/health",
-    tag: "IPFS",
-    summary: "IPFS pinning service health",
-    auth: false,
-    rateLimit: "queryLimiter",
-    responseExample: { enabled: true, ok: true },
-  },
-  {
-    method: "post",
-    path: "/ipfs/image",
-    tag: "IPFS",
-    summary: 'Upload an image to IPFS (multipart/form-data, field "image")',
-    auth: true,
-    rateLimit: "ipfsUploadLimiter",
-    responseExample: {
-      cid: "bafybei...",
-      size: 10240,
-      filename: "photo.png",
-      mimeType: "image/png",
+    "/ipfs/image": {
+      post: {
+        summary: "Upload image (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    errorStatuses: [400, 401, 429, 500, 503],
-  },
-  {
-    method: "post",
-    path: "/ipfs/metadata",
-    tag: "IPFS",
-    summary: "Upload proposal/comment metadata JSON to IPFS",
-    auth: true,
-    rateLimit: "ipfsUploadLimiter",
-    responseExample: { cid: "bafybei...", size: 512 },
-    errorStatuses: [400, 401, 429, 500, 503],
-  },
-  {
-    method: "get",
-    path: "/ipfs/:cid",
-    tag: "IPFS",
-    summary: "Retrieve JSON content pinned to IPFS",
-    auth: false,
-    rateLimit: "ipfsReadLimiter",
-    params: { cid: idParam("bafybei...", "IPFS CID") },
-    responseExample: { version: 1, body: "..." },
-    errorStatuses: [404],
-  },
-  {
-    method: "get",
-    path: "/ipfs/image/:cid",
-    tag: "IPFS",
-    summary: "Retrieve an image pinned to IPFS",
-    auth: false,
-    rateLimit: "ipfsReadLimiter",
-    params: { cid: idParam("bafybei...", "IPFS CID") },
-    responseExample: "(binary image data)",
-    errorStatuses: [404],
-  },
-  // ---- Events ----
-  {
-    method: "get",
-    path: "/events/archived",
-    tag: "Events",
-    summary: "List historical event archives",
-    auth: false,
-    rateLimit: "queryLimiter",
-    query: { daoId: z.string().optional().openapi({ example: "0" }) },
-    responseExample: { archives: [], total: 0 },
-  },
-  {
-    method: "get",
-    path: "/events/archived/:archiveId",
-    tag: "Events",
-    summary: "Retrieve historical archived events",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: {
-      archiveId: idParam("archive_dao_0_1785200000000", "Archive identifier"),
+    "/ipfs/metadata": {
+      post: {
+        summary: "Upload metadata (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    responseExample: {
-      archiveId: "archive_dao_0_1785200000000",
-      events: [],
-      total: 0,
+    "/daos/sync": {
+      post: {
+        summary: "Sync DAOs (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-  },
-  {
-    method: "get",
-    path: "/events/:daoId",
-    tag: "Events",
-    summary: "Get events for a DAO with cursor-based pagination",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: { daoId: idParam("0", "DAO identifier") },
-    query: {
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(500)
-        .optional()
-        .openapi({ example: 100 }),
-      cursor: z.string().optional().openapi({ example: "eyJpIjoxMjN9" }),
-      types: z
-        .string()
-        .optional()
-        .openapi({ example: "vote_cast,proposal_created" }),
-      orderBy: z
-        .enum(["id", "timestamp", "ledger", "type", "verified", "created_at"])
-        .optional()
-        .openapi({ example: "timestamp" }),
-      orderDirection: z
-        .enum(["ASC", "DESC"])
-        .optional()
-        .openapi({ example: "DESC" }),
-      cursorField: z
-        .enum(["id", "ledger", "timestamp"])
-        .optional()
-        .openapi({ example: "id" }),
+    "/events": {
+      post: {
+        summary: "Manual event (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    responseExample: {
-      data: [],
-      pagination: { cursor: undefined, hasMore: false, total: 0 },
+    "/events/notify": {
+      post: {
+        summary: "Notify event (audited)",
+        security: [{ relayerAuth: [] }],
+        "x-audited": true,
+      },
     },
-    responseSchema: paginatedResponseSchema,
-  },
-  {
-    method: "get",
-    path: "/indexer/status",
-    tag: "Events",
-    summary: "Event indexer status",
-    auth: false,
-    rateLimit: "queryLimiter",
-    responseExample: { running: true, lastLedger: 0 },
-  },
-  {
-    method: "get",
-    path: "/indexer/daos",
-    tag: "Events",
-    summary: "List all indexed DAOs with event counts",
-    auth: false,
-    rateLimit: "queryLimiter",
-    responseExample: { daos: [] },
-  },
-  {
-    method: "post",
-    path: "/events",
-    tag: "Events",
-    summary: "Manually insert an event (admin only)",
-    auth: true,
-    rateLimit: null,
-    body: manualEventSchema,
-    responseExample: { success: true },
-    errorStatuses: [400, 401, 500],
-  },
-  {
-    method: "post",
-    path: "/events/notify",
-    tag: "Events",
-    summary: "Frontend notification of an unverified on-chain event",
-    auth: true,
-    rateLimit: "queryLimiter",
-    body: notifyEventSchema,
-    responseExample: {
-      success: true,
-      message: "Event queued for verification",
+    "/remediation/action": {
+      post: {
+        summary: "Structured remediation action (append-only, authz, replay-safe)",
+        security: [{ relayerAuth: [] }],
+        requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/RemediationAction" } } } },
+        responses: { "201": { description: "Recorded" }, "409": { description: "Duplicate idempotencyKey" }, "401": { description: "Unauthorized" } },
+        "x-audited": true,
+        "x-append-only": true,
+        "x-replay-safe": true,
+      },
     },
-    errorStatuses: [400, 401, 429, 500],
-  },
-  // ---- Bridge ----
-  {
-    method: "post",
-    path: "/bridge/vote",
-    tag: "Bridge",
-    summary: "Submit a cross-chain (EVM -> Soroban) vote",
-    auth: false,
-    rateLimit: null,
-    body: bridgeVoteSchema,
-    responseExample: { success: true, txHash: "a1b2c3...64hex" },
-    responseSchema: successResponseSchema,
-    errorStatuses: [400, 500],
-  },
-  {
-    method: "get",
-    path: "/bridge/nullifier/:daoId/:proposalId/:nullifier",
-    tag: "Bridge",
-    summary: "Check whether a nullifier has already been used",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: {
-      daoId: idParam("0", "DAO identifier"),
-      proposalId: idParam("1", "Proposal identifier"),
-      nullifier: idParam("0x1234...", "Nullifier hash"),
+    "/remediation/log": {
+      get: {
+        summary: "Query remediation log",
+        security: [{ relayerAuth: [] }],
+        parameters: [{ name: "action", in: "query", schema: { type: "string" } }, { name: "target", in: "query", schema: { type: "string" } }, { name: "limit", in: "query", schema: { type: "integer" } }, { name: "offset", in: "query", schema: { type: "integer" } }],
+        responses: { "200": { description: "Log entries" } },
+      },
     },
-    responseExample: {
-      daoId: 0,
-      proposalId: 1,
-      nullifier: "0x1234...",
-      used: false,
+    "/audit/logs": {
+      get: {
+        summary: "Query audit logs (redacted, authz)",
+        security: [{ relayerAuth: [] }],
+        parameters: [{ name: "action", in: "query", schema: { type: "string" } }, { name: "actor", in: "query", schema: { type: "string" } }, { name: "method", in: "query", schema: { type: "string" } }, { name: "from", in: "query", schema: { type: "string", format: "date-time" } }, { name: "to", in: "query", schema: { type: "string", format: "date-time" } }, { name: "limit", in: "query", schema: { type: "integer" } }, { name: "offset", in: "query", schema: { type: "integer" } }],
+        responses: { "200": { description: "Audit entries" } },
+        "x-redacted": true,
+      },
     },
-    errorStatuses: [404, 500],
-  },
-  {
-    method: "post",
-    path: "/bridge/relay",
-    tag: "Bridge",
-    summary: "Manually trigger cross-chain event relay (admin only)",
-    auth: true,
-    rateLimit: null,
-    responseExample: { success: true },
-    errorStatuses: [401, 500],
-  },
-  // ---- Circuits ----
-  {
-    method: "get",
-    path: "/circuits/:dao/:type/status",
-    tag: "Circuits",
-    summary: "Get the active/available ZK circuit versions for a DAO",
-    auth: false,
-    rateLimit: "queryLimiter",
-    params: circuitParamsSchema.shape,
-    responseExample: {
-      daoId: 0,
-      circuitType: "Vote",
-      currentCircuit: "vote_v1",
-      availableCircuits: [],
+    "/audit/export": {
+      get: {
+        summary: "Export audit logs (json/csv)",
+        security: [{ relayerAuth: [] }],
+        parameters: [{ name: "format", in: "query", schema: { type: "string", enum: ["json", "csv"] } }],
+        responses: { "200": { description: "Exported logs" } },
+      },
     },
   },
   // ---- Proposal search (#377) ----
@@ -799,102 +564,27 @@ export const ENDPOINTS: EndpointDef[] = [
       format: z.enum(["json", "cef"]).optional(),
       verify: z.enum(["true", "false"]).optional(),
     },
-    responseExample: { logs: [], total: 0, limit: 50, offset: 0 },
-    errorStatuses: [401, 500],
   },
-  {
-    method: "get",
-    path: "/admin/sbt-transfer-attempts",
-    tag: "Admin",
-    summary:
-      "Review flagged membership-SBT transfer/approval attempts for a DAO (admin only)",
-    auth: true,
-    rateLimit: "queryLimiter",
-    query: {
-      daoId: z.string().openapi({ example: "1" }),
-      limit: z.string().optional().openapi({ example: "50" }),
-      offset: z.string().optional().openapi({ example: "0" }),
-    },
-    responseExample: { daoId: 1, attempts: [], total: 0, limit: 50, offset: 0 },
-    errorStatuses: [400, 401, 500],
-  },
-];
-
-// ============================================
-// SPEC BUILDER
-// ============================================
-
-const SECURITY_SCHEME = "RelayerAuth";
-
-function toOpenApiPath(expressPath: string): string {
-  return expressPath.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, "{$1}");
-}
-
-export function buildOpenApiDocument() {
-  const registry = new OpenAPIRegistry();
-
-  registry.registerComponent("securitySchemes", SECURITY_SCHEME, {
-    type: "apiKey",
-    in: "header",
-    name: "X-Relayer-Auth",
-    description:
-      "Shared relayer auth token (also accepted as `Authorization: Bearer <token>`). " +
-      "There is currently one shared token per deployment, not per-user credentials.",
-  });
-
-  for (const ep of ENDPOINTS) {
-    const responses: Record<string, ResponseConfig> = {
-      200: {
-        description: "Success",
-        content: {
-          "application/json": {
-            schema: ep.responseSchema ?? z.any(),
-            example: ep.responseExample,
-          },
-        },
-      },
-    };
-
-    for (const status of ep.errorStatuses ?? []) {
-      responses[status] = {
-        description: `Error (HTTP ${status})`,
-        content: { "application/json": { schema: errorResponseSchema } },
-      };
-    }
-
-    registry.registerPath({
-      method: ep.method,
-      path: toOpenApiPath(ep.path),
-      tags: [ep.tag],
-      summary: ep.summary,
-      description: ep.rateLimit
-        ? `Rate limit: ${ep.rateLimit}.`
-        : "No rate limit.",
-      security: ep.auth ? [{ [SECURITY_SCHEME]: [] }] : [],
-      request: {
-        ...(ep.params ? { params: z.object(ep.params) } : {}),
-        ...(ep.query ? { query: z.object(ep.query) } : {}),
-        ...(ep.body
-          ? { body: { content: { "application/json": { schema: ep.body } } } }
-          : {}),
-      },
-      responses,
-    });
-  }
-
-  const generator = new OpenApiGeneratorV31(registry.definitions);
-  return generator.generateDocument({
-    openapi: "3.1.0",
-    info: {
-      title: "ZK-VOTE Relayer API",
-      version: "1.0.0",
-      description:
-        "Backend relayer for anonymous voting on Stellar/Soroban. Generated from route " +
-        "definitions and Zod validation schemas — see backend/API.md for prose docs and " +
-        "GET /api-docs for interactive documentation.",
-    },
-    servers: [
-      { url: "http://localhost:3001", description: "Local development" },
+  "x-audit": {
+    description: "All mutating routes are audited with PII redaction. 100% coverage via global auditMiddleware.",
+    mutatingRoutes: [
+      "POST /vote",
+      "POST /comment/anonymous",
+      "POST /comment/edit",
+      "POST /comment/delete",
+      "POST /bridge/vote",
+      "POST /bridge/relay",
+      "POST /ipfs/image",
+      "POST /ipfs/metadata",
+      "POST /daos/sync",
+      "POST /events",
+      "POST /events/notify",
+      "POST /remediation/action",
     ],
-  });
-}
+    redaction: "proof, nullifier, root, commitment, secret, token, password, jwt always redacted",
+    immutable: "audit logs and remediation logs are append-only, no update/delete APIs",
+    replaySafe: "remediation uses idempotencyKey; duplicates return 409",
+  },
+} as const;
+
+export default openApiSpec;

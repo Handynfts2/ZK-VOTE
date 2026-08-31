@@ -83,8 +83,11 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
     res.json({
       data: paginatedDaos,
       pagination: {
-        cursor: hasMore ? String(offset + limit) : undefined,
+        cursor: String(offset),
+        nextCursor: hasMore ? String(offset + limit) : null,
         hasMore,
+        limit,
+        offset,
         total,
       },
       lastSync: dbService.getDaosSyncTime(),
