@@ -35,6 +35,8 @@ export {
   graduatedSlowDown,
   getRateLimitMetrics,
   claimLimiter,
+  createPerMemberLimiter,
+  commitmentRegistrationLimiter,
 } from "./rateLimit.js";
 export { validateBody, validateQuery, validateParams } from "./validate.js";
 export { auditLog } from "./audit.js";

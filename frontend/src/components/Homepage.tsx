@@ -1,6 +1,14 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "./ui/Button";
 import { useTranslation } from "../i18n/I18nContext";
+
+interface PublicProtocolStats {
+  totalDaos: number;
+  totalEvents: number;
+  lastLedger: number;
+  lastUpdated: string;
+}
 
 export function Homepage() {
   const navigate = useNavigate();
@@ -39,6 +47,46 @@ export function Homepage() {
             >
               {t("home.hero.documentation")} <span className="ml-2">→</span>
             </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Public Protocol Stats */}
+      <div className="py-16 border-t border-border/40">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex items-center justify-between gap-4 mb-8">
+            <div>
+              <p className="text-sm text-muted-foreground">Public protocol stats</p>
+              <h2 className="text-3xl font-bold tracking-tight mt-2">
+                Anonymous network activity
+              </h2>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {protocolStats?.lastUpdated
+                ? new Date(protocolStats.lastUpdated).toLocaleString()
+                : "Live"}
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">DAOs indexed</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.totalDaos ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">Events processed</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.totalEvents ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">Latest ledger</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.lastLedger ?? 0).toLocaleString()}
+              </p>
+            </div>
           </div>
         </div>
       </div>
