@@ -89,6 +89,14 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  authRoutes,
+  quadraticRoutes,
+  metricsRoutes,
+  remediationRoutes,
+  novaRoutes,
+  adminRoutes,
+  thresholdRoutes,
+  randomnessRoutes,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -230,6 +238,64 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(authRoutes);
+app.use(quadraticRoutes);
+app.use("/api/v1/nova", novaRoutes);
+app.use(noStore, adminRoutes);
+app.use(noStore, thresholdRoutes);
+app.use(noStore, randomnessRoutes);
+
+// ============================================
+// API VERSIONING (#139)
+// ============================================
+// URL-based versioning: mount the same routers under /api/v1 in addition to
+// the existing unversioned paths, so existing clients keep working while new
+// clients can opt into the explicit, cache-friendly versioned path. A
+// response header also advertises which version served the request.
+//
+// Deliberately out of scope for this pass (see PR body): deprecation/Sunset
+// headers for the unversioned routes, a version-lifecycle policy doc, and
+// updating the frontend to call /api/v1.
+app.use((_req, res, next) => {
+  res.setHeader("API-Version", "v1");
+  next();
+});
+
+const v1Router = express.Router();
+v1Router.use(metricsRoutes);
+v1Router.use(healthRoutes);
+v1Router.use(remediationRoutes);
+v1Router.use(noStore, votingRoutes);
+v1Router.use(daoRoutes);
+v1Router.use(ipfsRoutes);
+v1Router.use(commentsRoutes);
+v1Router.use(indexerRoutes);
+v1Router.use(bridgeRoutes);
+v1Router.use(circuitRoutes);
+v1Router.use(quadraticRoutes);
+v1Router.use(noStore, adminRoutes);
+v1Router.use(noStore, thresholdRoutes);
+v1Router.use(noStore, randomnessRoutes);
+app.use("/api/v1", v1Router);
+
+// OpenAPI spec + interactive docs
+const openApiDocument = buildOpenApiDocument();
+app.get("/api-docs/openapi.json", (_req, res) => res.json(openApiDocument));
+app.use(
+  "/api-docs",
+  // helmet's default CSP blocks the inline scripts/styles Swagger UI's
+  // bundled assets need; relax it for this documentation-only route.
+  (
+    _req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    res.removeHeader("Content-Security-Policy");
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(openApiDocument),
+);
 
 // Global error handler (must be last)
 app.use(errorHandler);
