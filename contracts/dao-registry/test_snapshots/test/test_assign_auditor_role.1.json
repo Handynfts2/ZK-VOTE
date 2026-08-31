@@ -16,42 +16,13 @@
               "function_name": "create_dao",
               "args": [
                 {
-                  "string": "DAO 1"
+                  "string": "Test DAO"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
                   "bool": false
-                },
-                {
-                  "bool": true
-                },
-                "void"
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "create_dao",
-              "args": [
-                {
-                  "string": "DAO 2"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "bool": true
                 },
                 {
                   "bool": true
@@ -71,21 +42,20 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "create_dao",
+              "function_name": "assign_role",
               "args": [
                 {
-                  "string": "DAO 3"
+                  "u64": "1"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "u32": 2
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "bool": false
-                },
-                {
-                  "bool": false
-                },
-                "void"
+                }
               ]
             }
           },
@@ -93,9 +63,6 @@
         }
       ]
     ],
-    [],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -179,7 +146,7 @@
                       "symbol": "name"
                     },
                     "val": {
-                      "string": "DAO 1"
+                      "string": "Test DAO"
                     }
                   }
                 ]
@@ -200,10 +167,13 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "dao"
+                    "symbol": "mrole"
                   },
                   {
-                    "u64": "2"
+                    "u64": "1"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                   }
                 ]
               },
@@ -212,7 +182,15 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "admin"
+                      "symbol": "assigned_at"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "member"
                     },
                     "val": {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -220,130 +198,10 @@
                   },
                   {
                     "key": {
-                      "symbol": "created_at"
+                      "symbol": "role"
                     },
                     "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "id"
-                    },
-                    "val": {
-                      "u64": "2"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "members_can_propose"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "membership_open"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "metadata_cid"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "name"
-                    },
-                    "val": {
-                      "string": "DAO 2"
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 535680
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "vec": [
-                  {
-                    "symbol": "dao"
-                  },
-                  {
-                    "u64": "3"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "admin"
-                    },
-                    "val": {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "created_at"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "id"
-                    },
-                    "val": {
-                      "u64": "3"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "members_can_propose"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "membership_open"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "metadata_cid"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "name"
-                    },
-                    "val": {
-                      "string": "DAO 3"
+                      "u32": 2
                     }
                   }
                 ]
@@ -374,7 +232,7 @@
                         "symbol": "dao_cnt"
                       },
                       "val": {
-                        "u64": "3"
+                        "u64": "1"
                       }
                     },
                     {
@@ -421,26 +279,6 @@
             "contract_data": {
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-              "key": {
-                "ledger_key_nonce": {
-                  "nonce": "1033654523790656264"
-                }
-              },
-              "durability": "temporary",
-              "val": "void"
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 6311999
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
               "key": {
                 "ledger_key_nonce": {
                   "nonce": "5541220902715666415"
