@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyVoting } from "../lib/readOnlyContracts";
 import { calculateNullifier } from "../lib/zkproof";
 import { getZKCredentials } from "../lib/zk";
 import { queryKeys } from "../lib/queryClient";
-import type { Client as VotingClient } from "../contracts/voting/dist/index.js";
+import type { Client as VotingClient } from "../client/voting/dist/index.js";
 
 export interface Proposal {
   id: number;
@@ -33,7 +33,7 @@ async function loadProposal({
 }: LoadProposalParams): Promise<Proposal | null> {
   try {
     const votingClient: VotingClient = publicKey
-      ? initializeContractClients(publicKey).voting
+      ? getZkVoteClient(publicKey).voting
       : getReadOnlyVoting();
 
     const proposalResult = await votingClient.get_proposal({
@@ -93,7 +93,7 @@ async function fetchProposals(
 ): Promise<Proposal[]> {
   // Get proposal count from contract
   const votingClient: VotingClient = publicKey
-    ? initializeContractClients(publicKey).voting
+    ? getZkVoteClient(publicKey).voting
     : getReadOnlyVoting();
 
   let proposalCount = 5; // Default fallback

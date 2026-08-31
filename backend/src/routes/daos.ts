@@ -38,7 +38,7 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { limit, offset, user } = (req as any).validatedQuery;
+  const { limit, offset, user, search, membershipType } = (req as any).validatedQuery;
 
   try {
     // The DAO list is served from the sync cache whether or not a user was
@@ -76,13 +76,18 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
       total,
       offset,
       limit,
+      search: search ?? null,
+      membershipType: membershipType ?? null,
     });
 
     res.json({
       data: paginatedDaos,
       pagination: {
-        cursor: hasMore ? String(offset + limit) : undefined,
+        cursor: String(offset),
+        nextCursor: hasMore ? String(offset + limit) : null,
         hasMore,
+        limit,
+        offset,
         total,
       },
       lastSync: dbService.getDaosSyncTime(),
@@ -131,6 +136,116 @@ router.post(
     } catch (err) {
       log("error", "dao_sync_failed", { error: (err as Error).message });
       res.status(500).json({ error: "Failed to sync DAOs" });
+    }
+  }) as AsyncHandler,
+);
+
+/**
+ * GET /proposals/:daoId - Search and filter proposals for a DAO
+ *
+ * Retrieves proposal_created events from the event store and applies
+ * optional status and free-text filters.
+ *
+ * Query params:
+ *  - status        : "active" | "closed" | "all"  (default "all")
+ *  - search        : free-text substring match on proposal title
+ *  - limit / offset: pagination
+ *
+ * Authorization: public (queryLimiter rate-limited)
+ */
+router.get(
+  "/proposals/:daoId",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  validateQuery(proposalsQuerySchema),
+  (async (req: Request, res: Response) => {
+    const { daoId } = (req as any).validatedParams as { daoId: number };
+    const { limit, offset, status, search } = (req as any)
+      .validatedQuery as {
+      limit: number;
+      offset: number;
+      status: "active" | "closed" | "all";
+      search?: string;
+    };
+
+    try {
+      // Pull proposal_created events from the per-DAO partition table
+      const now = Date.now();
+      const { events } = dbService.getEventsForDao(daoId, {
+        types: ["proposal_created"],
+        limit: 1000, // Fetch a broad window; we filter in memory
+        offset: 0,
+        orderBy: "timestamp",
+        orderDirection: "DESC",
+      });
+
+      type ProposalEventData = {
+        proposal_id?: number;
+        title?: string;
+        end_time?: number;
+        closed?: boolean;
+        [key: string]: unknown;
+      };
+
+      // Shape raw events into lightweight proposal summaries
+      let proposals = events.map((evt) => {
+        const data = (evt.data ?? {}) as ProposalEventData;
+        const endTime = data.end_time ?? 0;
+        const isClosed =
+          !!data.closed || (endTime > 0 && endTime * 1000 < now);
+        return {
+          proposalId: data.proposal_id ?? null,
+          title: data.title ?? "",
+          endTime,
+          closed: isClosed,
+          txHash: evt.tx_hash ?? null,
+          timestamp: evt.timestamp,
+        };
+      });
+
+      // Apply status filter
+      if (status === "active") {
+        proposals = proposals.filter((p) => !p.closed);
+      } else if (status === "closed") {
+        proposals = proposals.filter((p) => p.closed);
+      }
+
+      // Apply free-text search on title
+      if (search) {
+        const lowerSearch = search.toLowerCase();
+        proposals = proposals.filter((p) =>
+          p.title.toLowerCase().includes(lowerSearch),
+        );
+      }
+
+      const total = proposals.length;
+      const paginated = proposals.slice(offset, offset + limit);
+      const hasMore = offset + limit < total;
+
+      log("info", "get_proposals_filtered", {
+        daoId,
+        status,
+        search: search ?? null,
+        total,
+        offset,
+        limit,
+      });
+
+      res.json({
+        data: paginated,
+        pagination: {
+          cursor: hasMore ? String(offset + limit) : undefined,
+          hasMore,
+          total,
+        },
+        filters: { status, search: search ?? null },
+      });
+    } catch (err) {
+      log("error", "get_proposals_failed", {
+        daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to get proposals" });
     }
   }) as AsyncHandler,
 );

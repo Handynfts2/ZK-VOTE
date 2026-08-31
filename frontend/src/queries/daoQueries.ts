@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyDaoRegistry } from "../lib/readOnlyContracts";
 import { queryKeys } from "../lib/queryClient";
 import { relayerFetch } from "../lib/api";
@@ -23,7 +23,7 @@ async function fetchDaoInfo(
 
   if (publicKey) {
     try {
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
       result = await clients.daoRegistry.get_dao({
         dao_id: BigInt(daoId),
       });

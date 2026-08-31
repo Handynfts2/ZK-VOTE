@@ -429,10 +429,21 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "timestamp", type: "INTEGER", notNull: true, primaryKey: false },
       { name: "status", type: "TEXT", notNull: true, primaryKey: false },
       { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+      // Added by migration 004: malleability-safe dedup key (nullable for legacy rows)
+      {
+        name: "canonical_proof_hash",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
     ],
     indexes: [
       { name: "idx_commitments_nullifier", columns: ["nullifier"] },
       { name: "idx_commitments_wallet", columns: ["wallet_address"] },
+      {
+        name: "idx_proof_commitments_canonical",
+        columns: ["canonical_proof_hash"],
+      },
     ],
   },
 };
@@ -971,7 +982,7 @@ function getAllPartitionDaoIds(database: DatabaseType): number[] {
  * @returns The write connection (backward compatible with prior callers).
  */
 export function initDb(dbPath?: string): DatabaseType {
-  const dbFile = dbPath ?? DB_FILE;
+  const dbFile = dbPath ?? activeDbFile ?? DB_FILE;
 
   // Reuse open handles for the same file
   if (writeDb && activeDbFile === dbFile) {
@@ -1196,11 +1207,13 @@ export function initDb(dbPath?: string): DatabaseType {
       wallet_address TEXT,
       timestamp INTEGER NOT NULL,
       status TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      canonical_proof_hash TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_commitments_nullifier ON proof_commitments(nullifier);
     CREATE INDEX IF NOT EXISTS idx_commitments_wallet ON proof_commitments(wallet_address);
+    CREATE INDEX IF NOT EXISTS idx_proof_commitments_canonical ON proof_commitments(canonical_proof_hash);
     -- Append-only, tamper-evident audit trail for privileged/administrative
     -- actions. Each row's hash covers its own fields plus the previous row's
     -- hash (hash chain), so any edit or reordering breaks verifyAuditChain().
@@ -1411,7 +1424,10 @@ export function closeDb(): void {
     knownPartitions.clear();
     writeHealthy = true;
     writeFailureReason = null;
+    activeDbFile = null;
     log("info", "db_closed");
+  } else {
+    activeDbFile = null;
   }
   updateConnectionGauges();
 }
@@ -3292,6 +3308,8 @@ export interface ProofCommitmentRecord {
   timestamp: number;
   status: "COMMITTED" | "REVEALED" | "EXPIRED";
   createdAt: string;
+  /** Malleability-safe dedup key (NULL for legacy rows). */
+  canonicalProofHash: string | null;
 }
 
 export function recordProofCommitment(
@@ -3301,14 +3319,19 @@ export function recordProofCommitment(
   proposalId: number,
   timestamp: number,
   walletAddress?: string | null,
+  canonicalProofHash?: string | null,
 ): void {
   const database = initDb();
   const createdAt = new Date().toISOString();
   database
     .prepare(
-      `INSERT INTO proof_commitments (commitment_hash, nullifier, dao_id, proposal_id, wallet_address, timestamp, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?)
-       ON CONFLICT(commitment_hash) DO UPDATE SET timestamp = excluded.timestamp, status = 'COMMITTED'`,
+      `INSERT INTO proof_commitments
+         (commitment_hash, nullifier, dao_id, proposal_id, wallet_address, timestamp, status, created_at, canonical_proof_hash)
+       VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?, ?)
+       ON CONFLICT(commitment_hash) DO UPDATE SET
+         timestamp = excluded.timestamp,
+         status = 'COMMITTED',
+         canonical_proof_hash = COALESCE(excluded.canonical_proof_hash, proof_commitments.canonical_proof_hash)`,
     )
     .run(
       commitmentHash,
@@ -3318,6 +3341,7 @@ export function recordProofCommitment(
       walletAddress || null,
       timestamp,
       createdAt,
+      canonicalProofHash ?? null,
     );
 }
 
@@ -3340,6 +3364,42 @@ export function getProofCommitment(
     timestamp: row.timestamp as number,
     status: row.status as "COMMITTED" | "REVEALED" | "EXPIRED",
     createdAt: row.created_at as string,
+    canonicalProofHash: (row.canonical_proof_hash as string | null) ?? null,
+  };
+}
+
+/**
+ * Look up a proof commitment by its canonical proof hash.
+ *
+ * Both malleable forms of a Groth16 proof ((A,B,C) and (-A,-B,C)) produce the
+ * same canonical hash after canonicalizeProof(), so this lookup correctly
+ * deduplicates retries that arrive with the negated proof form.
+ *
+ * Returns null for records written before migration 004 (canonical_proof_hash
+ * is NULL on those rows).
+ */
+export function getProofCommitmentByCanonicalHash(
+  canonicalHash: string,
+): ProofCommitmentRecord | null {
+  const database = initDb();
+  const row = database
+    .prepare(
+      "SELECT * FROM proof_commitments WHERE canonical_proof_hash = ? LIMIT 1",
+    )
+    .get(canonicalHash) as Record<string, unknown> | undefined;
+
+  if (!row) return null;
+
+  return {
+    commitmentHash: row.commitment_hash as string,
+    nullifier: row.nullifier as string,
+    daoId: row.dao_id as number,
+    proposalId: row.proposal_id as number,
+    walletAddress: row.wallet_address as string | null,
+    timestamp: row.timestamp as number,
+    status: row.status as "COMMITTED" | "REVEALED" | "EXPIRED",
+    createdAt: row.created_at as string,
+    canonicalProofHash: (row.canonical_proof_hash as string | null) ?? null,
   };
 }
 
