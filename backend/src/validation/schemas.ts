@@ -280,6 +280,27 @@ export const commitSchema = z.object({
 export type CommitRequest = z.infer<typeof commitSchema>;
 
 // ============================================
+// MEMBERSHIP REGISTRATION SCHEMA (#371)
+// ============================================
+
+/**
+ * Membership commitment registration request body.
+ * `caller` is the Stellar address of the member registering (used as the
+ * per-member rate-limit key on the backend and auth'd on-chain).
+ */
+export const membershipRegisterSchema = z.object({
+  daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+  commitment: bn254Field,
+  caller: z
+    .string()
+    .regex(/^G[A-Z2-7]{55}$/, "caller must be a valid Stellar address"),
+});
+
+export type MembershipRegisterRequest = z.infer<
+  typeof membershipRegisterSchema
+>;
+
+// ============================================
 // VOTE SCHEMA
 // ============================================
 

@@ -159,6 +159,19 @@ const envSchema = z.object({
   COMMITMENT_RATE_LIMIT: z.coerce.number().int().positive().default(5),
   COMMITMENT_RATE_WINDOW_MS: z.coerce.number().int().positive().default(60000),
 
+  // #371: per-member commitment registration rate limit (relayer route).
+  // Mirrors the on-chain per-member cooldown in the membership-tree contract.
+  COMMITMENT_REGISTRATION_RATE_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  COMMITMENT_REGISTRATION_RATE_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60000),
+
   FLAG_THRESHOLD: z.coerce.number().int().positive().default(3),
   FLAG_POW_DIFFICULTY: z.coerce.number().int().positive().default(10),
 
@@ -471,6 +484,12 @@ export const config = {
   // Anti-spam: per-commitment rate limiting
   commitmentRateLimit: validatedEnv.COMMITMENT_RATE_LIMIT,
   commitmentRateWindowMs: validatedEnv.COMMITMENT_RATE_WINDOW_MS,
+
+  // Anti-spam: per-member commitment registration rate limiting (#371)
+  commitmentRegistrationRateLimit:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_LIMIT,
+  commitmentRegistrationRateWindowMs:
+    validatedEnv.COMMITMENT_REGISTRATION_RATE_WINDOW_MS,
 
   // Anti-spam: community flagging
   flagThreshold: validatedEnv.FLAG_THRESHOLD,
