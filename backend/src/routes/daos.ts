@@ -38,7 +38,7 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { limit, offset, user } = (req as any).validatedQuery;
+  const { limit, offset, user, search, membershipType } = (req as any).validatedQuery;
 
   try {
     // The DAO list is served from the sync cache whether or not a user was
@@ -76,6 +76,8 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
       total,
       offset,
       limit,
+      search: search ?? null,
+      membershipType: membershipType ?? null,
     });
 
     res.json({
@@ -136,6 +138,107 @@ router.post(
       res.status(500).json({ error: "Failed to sync DAOs" });
     }
   }) as AsyncHandler,
+);
+
+router.post(
+  "/dao/:daoId/notifications/subscribe",
+  bodyLimit("1kb"),
+  authGuard,
+  auditLog("dao_notifications_subscribe"),
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const { walletAddress } = req.body ?? {};
+
+      if (typeof walletAddress !== "string" || walletAddress.trim().length === 0) {
+        return res.status(400).json({ error: "walletAddress is required" });
+      }
+
+      const result = dbService.subscribeToDaoProposalLifecycle(daoId, walletAddress);
+      return res.json({
+        success: true,
+        active: result.active,
+        walletAddressHash: result.walletAddressHash,
+      });
+    } catch (err) {
+      log("error", "dao_notifications_subscribe_failed", {
+        error: (err as Error).message,
+      });
+      return res.status(500).json({ error: "Failed to subscribe to DAO notifications" });
+    }
+  },
+);
+
+router.post(
+  "/dao/:daoId/notifications/unsubscribe",
+  bodyLimit("1kb"),
+  authGuard,
+  auditLog("dao_notifications_unsubscribe"),
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const { walletAddress } = req.body ?? {};
+
+      if (typeof walletAddress !== "string" || walletAddress.trim().length === 0) {
+        return res.status(400).json({ error: "walletAddress is required" });
+      }
+
+      const result = dbService.unsubscribeFromDaoProposalLifecycle(daoId, walletAddress);
+      return res.json({
+        success: result.success,
+        active: result.active,
+        walletAddressHash: result.walletAddressHash,
+      });
+    } catch (err) {
+      log("error", "dao_notifications_unsubscribe_failed", {
+        error: (err as Error).message,
+      });
+      return res.status(500).json({ error: "Failed to unsubscribe from DAO notifications" });
+    }
+  },
+);
+
+router.get(
+  "/dao/:daoId/notifications/subscriptions",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const subscriptions = dbService.listDaoProposalLifecycleSubscriptions(daoId);
+      res.json({ data: subscriptions });
+    } catch (err) {
+      log("error", "dao_notifications_list_failed", {
+        daoId: (req as any).validatedParams?.daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to list DAO notifications" });
+    }
+  },
+);
+
+router.get(
+  "/dao/:daoId/notifications",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const eventType = req.query.eventType as string | undefined;
+      const notifications = dbService.getDaoProposalLifecycleNotifications(daoId, {
+        eventType,
+      });
+      res.json({ data: notifications });
+    } catch (err) {
+      log("error", "dao_notifications_history_failed", {
+        daoId: (req as any).validatedParams?.daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to load DAO notification history" });
+    }
+  },
 );
 
 export default router;
