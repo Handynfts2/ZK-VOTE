@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
@@ -100,7 +100,7 @@ export default function PublicVotes({
       let vkResult;
       if (publicKey) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           result = await clients.daoRegistry.get_dao({
             dao_id: BigInt(publicDaoId),
           });
@@ -144,7 +144,7 @@ export default function PublicVotes({
         try {
           if (publicKey) {
             try {
-              const clients = initializeContractClients(publicKey);
+              const clients = getZkVoteClient(publicKey);
               const membershipResult = await clients.membershipSbt.has({
                 dao_id: BigInt(publicDaoId),
                 of: publicKey,
@@ -182,7 +182,7 @@ export default function PublicVotes({
           if (cached && publicKey) {
             try {
               try {
-                const clients = initializeContractClients(publicKey);
+                const clients = getZkVoteClient(publicKey);
                 const leafIndexResult =
                   await clients.membershipTree.get_leaf_index({
                     dao_id: BigInt(publicDaoId),
@@ -223,7 +223,7 @@ export default function PublicVotes({
       try {
         if (publicKey) {
           try {
-            const clients = initializeContractClients(publicKey);
+            const clients = getZkVoteClient(publicKey);
             const countResult = await clients.membershipSbt.get_member_count({
               dao_id: BigInt(publicDaoId),
             });
@@ -291,7 +291,7 @@ export default function PublicVotes({
       setJoining(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       if (import.meta.env.DEV)
         console.log("[JoinDAO] Starting join for DAO:", dao.id);
@@ -412,7 +412,7 @@ export default function PublicVotes({
         console.log(
           "[Registration] Step 2: Registering commitment in Merkle tree...",
         );
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Helper to check if error is CommitmentExists (error #5 from tree contract)
       const isCommitmentExistsError = (err: unknown): boolean => {
@@ -642,7 +642,7 @@ export default function PublicVotes({
       setCreatingProposal(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       let endTime: bigint;
       if (data.deadlineSeconds === 0) {

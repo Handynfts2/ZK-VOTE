@@ -4,6 +4,7 @@
  * Handles anonymous vote submission with ZK proofs and proposal results retrieval.
  */
 
+import crypto from "crypto";
 import {
   Router,
   type Request,
@@ -13,6 +14,7 @@ import {
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { config } from "../config.js";
+import type { Groth16Proof } from "../types/index.js";
 import { log } from "../services/logger.js";
 import {
   server,
@@ -50,6 +52,7 @@ import {
   updateTransactionLogStatus,
   recordProofCommitment,
   getProofCommitment,
+  getProofCommitmentByCanonicalHash,
   updateProofCommitmentStatus,
   getVoteSubmission,
   insertVoteSubmission,
@@ -67,6 +70,45 @@ import { votesProcessed } from "../services/metrics.js";
 import { sharedSingleFlight } from "../utils/singleflight.js";
 
 const router = Router();
+
+/**
+ * Compute a malleability-safe canonical proof hash for dedup.
+ *
+ * Both malleable Groth16 forms — (A, B, C) and (-A, -B, C) — canonicalize to
+ * the same (A', B') via canonicalizeProof(), so a retry that sends the negated
+ * form will hash to the same value and be correctly rejected as a duplicate.
+ *
+ * Hash = SHA256(canonical_a_hex || canonical_b_hex || c_hex)
+ *
+ * Returns null when the proof is malformed (missing or non-hex a/b/c), so the
+ * caller can fall back to the legacy commitmentHash path rather than crashing.
+ */
+function computeCanonicalProofHash(proof: unknown): string | null {
+  if (!proof || typeof proof !== "object") return null;
+  const p = proof as Partial<Groth16Proof>;
+  if (
+    typeof p.a !== "string" ||
+    typeof p.b !== "string" ||
+    typeof p.c !== "string"
+  ) {
+    return null;
+  }
+  try {
+    const aBytes = Buffer.from(p.a.replace(/^0x/, ""), "hex");
+    const bBytes = Buffer.from(p.b.replace(/^0x/, ""), "hex");
+    if (aBytes.length !== 64 || bBytes.length !== 128) return null;
+
+    const { a: canonA, b: canonB } = canonicalizeProof(aBytes, bBytes);
+    const cHex = p.c.replace(/^0x/, "").toLowerCase();
+
+    return crypto
+      .createHash("sha256")
+      .update(canonA.toString("hex") + canonB.toString("hex") + cHex)
+      .digest("hex");
+  } catch {
+    return null;
+  }
+}
 
 interface VoteExecutionInput {
   daoId: number;
@@ -243,6 +285,18 @@ router.post(
         .json({ error: "Proof commitment already revealed" });
     }
 
+    // Canonical-hash dedup: both malleable forms of the proof must map to the
+    // same dedup key so a retry using (-A, -B, C) is correctly rejected.
+    const canonicalHash = computeCanonicalProofHash(proof);
+    if (canonicalHash) {
+      const canonicalRecord = getProofCommitmentByCanonicalHash(canonicalHash);
+      if (canonicalRecord && canonicalRecord.status === "REVEALED") {
+        return res
+          .status(400)
+          .json({ error: "Proof commitment already revealed" });
+      }
+    }
+
     recordProofCommitment(
       commitmentHash,
       nullifier,
@@ -250,6 +304,7 @@ router.post(
       proposalId,
       timestamp,
       walletAddress,
+      canonicalHash,
     );
 
     log("info", "proof_committed", {
@@ -440,6 +495,21 @@ router.post(
       let commitmentHash: string | undefined;
       if (proof && nullifier && timestamp) {
         commitmentHash = calculateProofHash(proof, nullifier, timestamp, nonce);
+
+        // Canonical-hash dedup: both malleable forms of the proof ((A,B,C) and
+        // (-A,-B,C)) canonicalize to the same hash, so a retry with the negated
+        // form is correctly detected as a duplicate submission.
+        const canonicalHash = computeCanonicalProofHash(proof);
+        if (canonicalHash) {
+          const canonicalRecord =
+            getProofCommitmentByCanonicalHash(canonicalHash);
+          if (canonicalRecord && canonicalRecord.status === "REVEALED") {
+            return res
+              .status(400)
+              .json({ error: "Proof commitment already revealed" });
+          }
+        }
+
         const commitmentRecord = getProofCommitment(commitmentHash);
         if (commitmentRecord) {
           if (commitmentRecord.status === "REVEALED") {
