@@ -140,114 +140,105 @@ router.post(
   }) as AsyncHandler,
 );
 
-/**
- * GET /proposals/:daoId - Search and filter proposals for a DAO
- *
- * Retrieves proposal_created events from the event store and applies
- * optional status and free-text filters.
- *
- * Query params:
- *  - status        : "active" | "closed" | "all"  (default "all")
- *  - search        : free-text substring match on proposal title
- *  - limit / offset: pagination
- *
- * Authorization: public (queryLimiter rate-limited)
- */
-router.get(
-  "/proposals/:daoId",
-  queryLimiter,
+router.post(
+  "/dao/:daoId/notifications/subscribe",
+  bodyLimit("1kb"),
+  authGuard,
+  auditLog("dao_notifications_subscribe"),
   validateParams(daoParamsSchema),
-  validateQuery(proposalsQuerySchema),
-  (async (req: Request, res: Response) => {
-    const { daoId } = (req as any).validatedParams as { daoId: number };
-    const { limit, offset, status, search } = (req as any)
-      .validatedQuery as {
-      limit: number;
-      offset: number;
-      status: "active" | "closed" | "all";
-      search?: string;
-    };
-
+  (req: Request, res: Response) => {
     try {
-      // Pull proposal_created events from the per-DAO partition table
-      const now = Date.now();
-      const { events } = dbService.getEventsForDao(daoId, {
-        types: ["proposal_created"],
-        limit: 1000, // Fetch a broad window; we filter in memory
-        offset: 0,
-        orderBy: "timestamp",
-        orderDirection: "DESC",
-      });
+      const { daoId } = (req as any).validatedParams;
+      const { walletAddress } = req.body ?? {};
 
-      type ProposalEventData = {
-        proposal_id?: number;
-        title?: string;
-        end_time?: number;
-        closed?: boolean;
-        [key: string]: unknown;
-      };
-
-      // Shape raw events into lightweight proposal summaries
-      let proposals = events.map((evt) => {
-        const data = (evt.data ?? {}) as ProposalEventData;
-        const endTime = data.end_time ?? 0;
-        const isClosed =
-          !!data.closed || (endTime > 0 && endTime * 1000 < now);
-        return {
-          proposalId: data.proposal_id ?? null,
-          title: data.title ?? "",
-          endTime,
-          closed: isClosed,
-          txHash: evt.tx_hash ?? null,
-          timestamp: evt.timestamp,
-        };
-      });
-
-      // Apply status filter
-      if (status === "active") {
-        proposals = proposals.filter((p) => !p.closed);
-      } else if (status === "closed") {
-        proposals = proposals.filter((p) => p.closed);
+      if (typeof walletAddress !== "string" || walletAddress.trim().length === 0) {
+        return res.status(400).json({ error: "walletAddress is required" });
       }
 
-      // Apply free-text search on title
-      if (search) {
-        const lowerSearch = search.toLowerCase();
-        proposals = proposals.filter((p) =>
-          p.title.toLowerCase().includes(lowerSearch),
-        );
-      }
-
-      const total = proposals.length;
-      const paginated = proposals.slice(offset, offset + limit);
-      const hasMore = offset + limit < total;
-
-      log("info", "get_proposals_filtered", {
-        daoId,
-        status,
-        search: search ?? null,
-        total,
-        offset,
-        limit,
-      });
-
-      res.json({
-        data: paginated,
-        pagination: {
-          cursor: hasMore ? String(offset + limit) : undefined,
-          hasMore,
-          total,
-        },
-        filters: { status, search: search ?? null },
+      const result = dbService.subscribeToDaoProposalLifecycle(daoId, walletAddress);
+      return res.json({
+        success: true,
+        active: result.active,
+        walletAddressHash: result.walletAddressHash,
       });
     } catch (err) {
-      log("error", "get_proposals_failed", {
-        daoId,
+      log("error", "dao_notifications_subscribe_failed", {
         error: (err as Error).message,
       });
-      res.status(500).json({ error: "Failed to get proposals" });
+      return res.status(500).json({ error: "Failed to subscribe to DAO notifications" });
     }
-  }) as AsyncHandler,
+  },
+);
+
+router.post(
+  "/dao/:daoId/notifications/unsubscribe",
+  bodyLimit("1kb"),
+  authGuard,
+  auditLog("dao_notifications_unsubscribe"),
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const { walletAddress } = req.body ?? {};
+
+      if (typeof walletAddress !== "string" || walletAddress.trim().length === 0) {
+        return res.status(400).json({ error: "walletAddress is required" });
+      }
+
+      const result = dbService.unsubscribeFromDaoProposalLifecycle(daoId, walletAddress);
+      return res.json({
+        success: result.success,
+        active: result.active,
+        walletAddressHash: result.walletAddressHash,
+      });
+    } catch (err) {
+      log("error", "dao_notifications_unsubscribe_failed", {
+        error: (err as Error).message,
+      });
+      return res.status(500).json({ error: "Failed to unsubscribe from DAO notifications" });
+    }
+  },
+);
+
+router.get(
+  "/dao/:daoId/notifications/subscriptions",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const subscriptions = dbService.listDaoProposalLifecycleSubscriptions(daoId);
+      res.json({ data: subscriptions });
+    } catch (err) {
+      log("error", "dao_notifications_list_failed", {
+        daoId: (req as any).validatedParams?.daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to list DAO notifications" });
+    }
+  },
+);
+
+router.get(
+  "/dao/:daoId/notifications",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    try {
+      const { daoId } = (req as any).validatedParams;
+      const eventType = req.query.eventType as string | undefined;
+      const notifications = dbService.getDaoProposalLifecycleNotifications(daoId, {
+        eventType,
+      });
+      res.json({ data: notifications });
+    } catch (err) {
+      log("error", "dao_notifications_history_failed", {
+        daoId: (req as any).validatedParams?.daoId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to load DAO notification history" });
+    }
+  },
 );
 
 export default router;

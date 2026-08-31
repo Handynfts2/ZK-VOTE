@@ -140,6 +140,25 @@ export interface IndexedDao {
   eventCount: number;
 }
 
+export interface ProposalLifecycleSubscription {
+  id: number;
+  daoId: number;
+  walletAddressHash: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProposalLifecycleNotification {
+  id: number;
+  daoId: number;
+  proposalId: number;
+  eventType: string;
+  walletAddressHash: string;
+  delivered: boolean;
+  createdAt: string;
+}
+
 // ============================================
 // SCHEMA VERSIONING
 // ============================================
@@ -402,6 +421,65 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
     ],
     indexes: [
       { name: "idx_vote_submissions_nullifier", columns: ["nullifier_hash"] },
+    ],
+  },
+  proposal_lifecycle_subscriptions: {
+    columns: [
+      { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
+      { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
+      {
+        name: "wallet_address_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
+      { name: "active", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "updated_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      {
+        name: "idx_proposal_lifecycle_subscriptions_dao",
+        columns: ["dao_id"],
+      },
+      {
+        name: "idx_proposal_lifecycle_subscriptions_active",
+        columns: ["dao_id", "active"],
+      },
+      {
+        name: "idx_proposal_lifecycle_subscriptions_unique",
+        columns: ["dao_id", "wallet_address_hash"],
+      },
+    ],
+  },
+  proposal_lifecycle_notifications: {
+    columns: [
+      { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
+      { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "event_type", type: "TEXT", notNull: true, primaryKey: false },
+      {
+        name: "wallet_address_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
+      { name: "delivered", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      {
+        name: "idx_proposal_lifecycle_notifications_dao",
+        columns: ["dao_id"],
+      },
+      {
+        name: "idx_proposal_lifecycle_notifications_event",
+        columns: ["dao_id", "event_type"],
+      },
+      {
+        name: "idx_proposal_lifecycle_notifications_unique",
+        columns: ["dao_id", "proposal_id", "event_type", "wallet_address_hash"],
+      },
     ],
   },
   proof_commitments: {
@@ -1213,7 +1291,34 @@ export function initDb(dbPath?: string): DatabaseType {
 
     CREATE INDEX IF NOT EXISTS idx_commitments_nullifier ON proof_commitments(nullifier);
     CREATE INDEX IF NOT EXISTS idx_commitments_wallet ON proof_commitments(wallet_address);
-    CREATE INDEX IF NOT EXISTS idx_proof_commitments_canonical ON proof_commitments(canonical_proof_hash);
+
+    CREATE TABLE IF NOT EXISTS proposal_lifecycle_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dao_id INTEGER NOT NULL,
+      wallet_address_hash TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(dao_id, wallet_address_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_subscriptions_dao ON proposal_lifecycle_subscriptions(dao_id);
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_subscriptions_active ON proposal_lifecycle_subscriptions(dao_id, active);
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_subscriptions_unique ON proposal_lifecycle_subscriptions(dao_id, wallet_address_hash);
+
+    CREATE TABLE IF NOT EXISTS proposal_lifecycle_notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dao_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      wallet_address_hash TEXT NOT NULL,
+      delivered INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(dao_id, proposal_id, event_type, wallet_address_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_notifications_dao ON proposal_lifecycle_notifications(dao_id);
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_notifications_event ON proposal_lifecycle_notifications(dao_id, event_type);
+    CREATE INDEX IF NOT EXISTS idx_proposal_lifecycle_notifications_unique ON proposal_lifecycle_notifications(dao_id, proposal_id, event_type, wallet_address_hash);
+
     -- Append-only, tamper-evident audit trail for privileged/administrative
     -- actions. Each row's hash covers its own fields plus the previous row's
     -- hash (hash chain), so any edit or reordering breaks verifyAuditChain().
@@ -1733,6 +1838,15 @@ export function addEvent(event: EventInput): boolean {
     invalidateCachePrefix(`indexedDaos`);
     invalidateCachePrefix(`dbStatus`);
     incrementTransactionCounter();
+
+    const proposalLifecycleEvent =
+      event.type === "proposal_created" || event.type === "proposal_closed";
+    if (proposalLifecycleEvent) {
+      const proposalId = extractProposalId(event.data);
+      if (proposalId !== null) {
+        emitProposalLifecycleNotifications(event.daoId, proposalId, event.type);
+      }
+    }
   }
 
   return result;
@@ -1756,6 +1870,245 @@ export function addPendingEvent(
     timestamp: new Date().toISOString(),
     verified: false,
   });
+}
+
+function normalizeWalletAddress(walletAddress: string): string {
+  const value = walletAddress.trim();
+  if (!value) {
+    throw new Error("Wallet address is required");
+  }
+  return value;
+}
+
+function hashWalletAddress(walletAddress: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(normalizeWalletAddress(walletAddress).toLowerCase())
+    .digest("hex");
+}
+
+function extractProposalId(
+  data: Record<string, unknown> | null | undefined,
+): number | null {
+  if (!data || typeof data !== "object") return null;
+
+  const rawProposalId =
+    data.proposalId ?? data.proposal_id ?? data.id ?? data.proposal ?? null;
+
+  if (typeof rawProposalId === "number" && Number.isFinite(rawProposalId)) {
+    return rawProposalId > 0 ? rawProposalId : null;
+  }
+
+  if (typeof rawProposalId === "string") {
+    const parsed = Number(rawProposalId);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  return null;
+}
+
+export function subscribeToDaoProposalLifecycle(
+  daoId: number,
+  walletAddress: string,
+): { success: boolean; active: boolean; walletAddressHash: string } {
+  validateDaoId(daoId);
+  const hash = hashWalletAddress(walletAddress);
+  const database = getWriteDb();
+  const now = new Date().toISOString();
+
+  const row = database
+    .prepare(
+      `
+        INSERT INTO proposal_lifecycle_subscriptions (dao_id, wallet_address_hash, active, created_at, updated_at)
+        VALUES (?, ?, 1, ?, ?)
+        ON CONFLICT(dao_id, wallet_address_hash)
+        DO UPDATE SET active = 1, updated_at = excluded.updated_at
+      `,
+    )
+    .run(daoId, hash, now, now);
+
+  if (row.changes !== 0 || row.lastInsertRowid !== undefined) {
+    return { success: true, active: true, walletAddressHash: hash };
+  }
+
+  const existing = database
+    .prepare(
+      `SELECT active FROM proposal_lifecycle_subscriptions WHERE dao_id = ? AND wallet_address_hash = ?`,
+    )
+    .get(daoId, hash) as { active: number } | undefined;
+
+  return {
+    success: true,
+    active: existing ? Boolean(existing.active) : true,
+    walletAddressHash: hash,
+  };
+}
+
+export function unsubscribeFromDaoProposalLifecycle(
+  daoId: number,
+  walletAddress: string,
+): { success: boolean; active: boolean; walletAddressHash: string } {
+  validateDaoId(daoId);
+  const hash = hashWalletAddress(walletAddress);
+  const database = getWriteDb();
+  const row = database
+    .prepare(
+      `UPDATE proposal_lifecycle_subscriptions
+       SET active = 0, updated_at = ?
+       WHERE dao_id = ? AND wallet_address_hash = ?`,
+    )
+    .run(new Date().toISOString(), daoId, hash);
+
+  return {
+    success: row.changes > 0 || row.lastInsertRowid !== undefined,
+    active: false,
+    walletAddressHash: hash,
+  };
+}
+
+export function listDaoProposalLifecycleSubscriptions(
+  daoId: number,
+  options: { includeInactive?: boolean } = {},
+): ProposalLifecycleSubscription[] {
+  validateDaoId(daoId);
+  const database = getReadDb();
+  const includeInactive = options.includeInactive ?? false;
+
+  const rows = database
+    .prepare(
+      `
+        SELECT
+          id,
+          dao_id AS daoId,
+          wallet_address_hash AS walletAddressHash,
+          active,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+        FROM proposal_lifecycle_subscriptions
+        WHERE dao_id = ? ${includeInactive ? "" : "AND active = 1"}
+        ORDER BY created_at ASC
+      `,
+    )
+    .all(daoId) as Array<{
+      id: number;
+      daoId: number;
+      walletAddressHash: string;
+      active: number;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    daoId: row.daoId,
+    walletAddressHash: row.walletAddressHash,
+    active: Boolean(row.active),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export function getDaoProposalLifecycleNotifications(
+  daoId: number,
+  options: { eventType?: string } = {},
+): ProposalLifecycleNotification[] {
+  validateDaoId(daoId);
+  const database = getReadDb();
+  const eventType = options.eventType;
+
+  const query = `
+        SELECT
+          id,
+          dao_id AS daoId,
+          proposal_id AS proposalId,
+          event_type AS eventType,
+          wallet_address_hash AS walletAddressHash,
+          delivered,
+          created_at AS createdAt
+        FROM proposal_lifecycle_notifications
+        WHERE dao_id = ? ${eventType ? "AND event_type = ?" : ""}
+        ORDER BY created_at ASC
+      `;
+  const rows = eventType
+    ? (database.prepare(query).all(daoId, eventType) as Array<{
+        id: number;
+        daoId: number;
+        proposalId: number;
+        eventType: string;
+        walletAddressHash: string;
+        delivered: number;
+        createdAt: string;
+      }>)
+    : (database.prepare(query).all(daoId) as Array<{
+        id: number;
+        daoId: number;
+        proposalId: number;
+        eventType: string;
+        walletAddressHash: string;
+        delivered: number;
+        createdAt: string;
+      }>);
+
+  return rows.map((row) => ({
+    id: row.id,
+    daoId: row.daoId,
+    proposalId: row.proposalId,
+    eventType: row.eventType,
+    walletAddressHash: row.walletAddressHash,
+    delivered: Boolean(row.delivered),
+    createdAt: row.createdAt,
+  }));
+}
+
+function addProposalLifecycleNotification(
+  daoId: number,
+  proposalId: number,
+  eventType: string,
+  walletAddressHash: string,
+): void {
+  const database = getWriteDb();
+  const now = new Date().toISOString();
+
+  database
+    .prepare(
+      `
+        INSERT OR IGNORE INTO proposal_lifecycle_notifications (
+          dao_id,
+          proposal_id,
+          event_type,
+          wallet_address_hash,
+          delivered,
+          created_at
+        ) VALUES (?, ?, ?, ?, 0, ?)
+      `,
+    )
+    .run(daoId, proposalId, eventType, walletAddressHash, now);
+}
+
+export function emitProposalLifecycleNotifications(
+  daoId: number,
+  proposalId: number,
+  eventType: string,
+): number {
+  const allowedEvents = new Set(["proposal_created", "proposal_closed"]);
+  if (!allowedEvents.has(eventType)) {
+    return 0;
+  }
+
+  const subscribers = listDaoProposalLifecycleSubscriptions(daoId, {
+    includeInactive: false,
+  });
+
+  for (const subscription of subscribers) {
+    addProposalLifecycleNotification(
+      daoId,
+      proposalId,
+      eventType,
+      subscription.walletAddressHash,
+    );
+  }
+
+  return subscribers.length;
 }
 
 /**
