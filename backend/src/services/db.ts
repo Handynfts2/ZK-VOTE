@@ -815,6 +815,15 @@ export function getWriteFailureReason(): string | null {
  * On connection-level failure, attempts one reconnect (failover).
  * Does not switch away from an already-open custom dbPath.
  */
+/**
+ * Whether the write connection has been initialized already (without
+ * forcing initialization). Used by best-effort audit writers (e.g. backup
+ * key rotation metadata) that should never trigger a DB bootstrap.
+ */
+export function isDbInitialized(): boolean {
+  return writeDb !== null;
+}
+
 export function getWriteDb(): DatabaseType {
   if (writeDb) {
     try {

@@ -40,6 +40,10 @@ import {
   detectAndHandleWalIssue,
 } from "./services/walResilience.js";
 import {
+  startScheduledBackups,
+  stopScheduledBackups,
+} from "./services/backup.js";
+import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
 } from "./services/ipfs-monitor.js";
@@ -533,6 +537,10 @@ async function startBackgroundServices(): Promise<void> {
     startWalCheckpointing(database);
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
+    // Encrypted snapshot backups (#359) — opt-in via BACKUP_ENCRYPTION_ENABLED.
+    if (config.backupEncryptionEnabled) {
+      startScheduledBackups(config.backupIntervalMs);
+    }
   } catch (err) {
     log("warn", "wal_resilience_start_failed", {
       error: (err as Error).message,
@@ -561,6 +569,7 @@ function stopBackgroundServices(): void {
   stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
+  stopScheduledBackups();
 }
 
 // ============================================
