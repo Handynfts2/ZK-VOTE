@@ -19,9 +19,9 @@ import {
   getZKCredentials,
   storeZKCredentials,
 } from "../lib/zk";
-import { assertValidFieldElement, assertValidNullifier } from "../types/index";
-import { CheckCircle, XCircle, AlertTriangle, Loader2, X } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, X } from "lucide-react";
 import { useReceipts } from "../hooks/useReceipts";
+import VoteModeExplainer from "./ui/VoteModeExplainer";
 
 interface VoteModalProps {
   proposalId: number;
@@ -441,15 +441,7 @@ export default function VoteModal({
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
           {step === "select" && (
             <>
-              {voteMode === "Fixed" && (
-                <Alert variant="warning" className="text-xs">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>
-                    Only members present when this proposal was created can vote
-                    (snapshot voting).
-                  </span>
-                </Alert>
-              )}
+              <VoteModeExplainer mode={voteMode} />
 
               {/* ── PANIC MODE TOGGLE (coercion resistance) ─────────────────────
                   THREAT_MODEL §coercion: if a voter is being coerced, they can

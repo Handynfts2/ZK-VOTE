@@ -119,8 +119,11 @@ describe("VoteModal", () => {
     renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Fixed" />);
 
     expect(
+      screen.getByText(/Revocation semantics in Fixed \(snapshot\) mode/),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(
-        /Only members present when this proposal was created can vote/,
+        /Only members who were present when the proposal was created/,
       ),
     ).toBeInTheDocument();
   });
@@ -130,9 +133,33 @@ describe("VoteModal", () => {
 
     expect(
       screen.queryByText(
-        /Only members present when this proposal was created can vote/,
+        /Only members who were present when the proposal was created/,
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows revocation semantics explainer for Trailing mode", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Trailing" />);
+
+    expect(
+      screen.getByText(/Revocation semantics in Trailing \(dynamic\) mode/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/their eligibility ends immediately/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows accurate Fixed-mode revocation semantics when already revoked", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Fixed" />);
+
+    // Fixed-mode snapshot: a member revoked AFTER creation can still vote
+    // with a pre-revocation proof (intentional privacy boundary).
+    expect(
+      screen.getByText(
+        /cached a valid ZK proof generated before the revocation/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/This is intentional/)).toBeInTheDocument();
   });
 
   it("calls onClose when clicking outside the modal", () => {
