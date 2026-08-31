@@ -1,61 +1,285 @@
 /**
- * OpenAPI Specification for ZKVote Backend
- * Documents all routes including audit and remediation for accountability.
- * Scope: middleware/audit.ts, routes/*, openapi.ts
+ * OpenAPI 3.1 Specification Builder
+ *
+ * Builds the API's OpenAPI document from the same Zod schemas used to
+ * validate requests at runtime (all centralized in validation/schemas.ts),
+ * plus a compact per-endpoint metadata table below.
+ * That table is also the source `scripts/generate-openapi.ts` uses to check
+ * API.md doesn't drift from the implemented routes — see that script for how
+ * the two stay in sync.
  */
 
-export const openApiSpec = {
-  openapi: "3.0.3",
-  info: {
-    title: "ZKVote Relayer API",
-    version: "1.0.0",
-    description: "Anonymous voting relayer with full audit trail and incident response",
-  },
-  servers: [{ url: "http://localhost:3001", description: "Local" }],
-  security: [{ bearerAuth: [] }],
-  components: {
-    securitySchemes: {
-      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
-      relayerAuth: { type: "apiKey", in: "header", name: "X-Relayer-Auth" },
+import {
+  OpenAPIRegistry,
+  OpenApiGeneratorV31,
+  extendZodWithOpenApi,
+  type ResponseConfig,
+} from "@asteasolutions/zod-to-openapi";
+import { z, type ZodTypeAny } from "zod";
+import {
+  voteSchema,
+  anonymousCommentSchema,
+  editCommentSchema,
+  deleteCommentSchema,
+  flagCommentSchema,
+  manualEventSchema,
+  notifyEventSchema,
+  bridgeVoteSchema,
+  circuitParamsSchema,
+} from "./validation/schemas.js";
+
+extendZodWithOpenApi(z);
+
+// ============================================
+// SHARED RESPONSE / PARAM SCHEMAS
+// ============================================
+
+export const errorResponseSchema = z
+  .object({ error: z.string().openapi({ example: "Unauthorized" }) })
+  .openapi("ErrorResponse");
+
+export const successResponseSchema = z
+  .object({
+    success: z.boolean().openapi({ example: true }),
+    txHash: z.string().optional().openapi({ example: "a1b2c3...64hex" }),
+  })
+  .openapi("SuccessResponse");
+
+/**
+ * A handful of read-endpoint response shapes, reused both to build the spec
+ * and (in test/openapi-validation.test.js) to validate live responses
+ * against it — the same pattern the issue's `zod-to-openapi` suggestion is
+ * about, applied to responses instead of just requests.
+ */
+export const healthResponseSchema = z
+  .object({
+    status: z.string().openapi({ example: "ok" }),
+    rpc: z.object({ ok: z.boolean() }).passthrough(),
+  })
+  .passthrough()
+  .openapi("HealthResponse");
+
+export const readyResponseSchema = z
+  .object({ status: z.string().openapi({ example: "ready" }) })
+  .passthrough()
+  .openapi("ReadyResponse");
+
+export const configResponseSchema = z
+  .object({
+    networkPassphrase: z.string(),
+    rpcUrl: z.string(),
+    ipfsEnabled: z.boolean(),
+  })
+  .passthrough()
+  .openapi("ConfigResponse");
+
+export const paginatedResponseSchema = z
+  .object({
+    data: z.array(z.record(z.unknown())),
+    pagination: z.object({
+      cursor: z.string().nullable().optional(),
+      hasMore: z.boolean(),
+      total: z.number(),
+    }),
+  })
+  .openapi("PaginatedResponse");
+
+export const daosListResponseSchema = z
+  .object({
+    data: z.array(z.record(z.unknown())),
+    pagination: z.object({
+      cursor: z.string().nullable().optional(),
+      hasMore: z.boolean(),
+      total: z.number(),
+    }),
+    lastSync: z.string().nullable(),
+    cached: z.boolean(),
+  })
+  .openapi("DaosListResponse");
+
+/** Path params are always strings on the wire, regardless of server-side coercion. */
+function idParam(example: string, description: string) {
+  return z.string().openapi({ example, description });
+}
+
+// ============================================
+// ENDPOINT METADATA
+//
+// This is the single source of truth for the generated OpenAPI spec
+// (openapi.json / GET /api-docs) AND for the API.md sync check in
+// scripts/generate-openapi.ts. Every route in src/routes/*.ts should have
+// exactly one entry here.
+// ============================================
+
+export interface EndpointDef {
+  method: "get" | "post";
+  path: string; // Express-style, e.g. /dao/:daoId
+  tag: string;
+  summary: string;
+  auth: boolean;
+  rateLimit: string | null;
+  params?: Record<string, ZodTypeAny>;
+  query?: Record<string, ZodTypeAny>;
+  body?: ZodTypeAny;
+  responseExample: unknown;
+  responseSchema?: ZodTypeAny;
+  errorStatuses?: number[];
+}
+
+export const ENDPOINTS: EndpointDef[] = [
+  // ---- Health ----
+  {
+    method: "get",
+    path: "/health",
+    tag: "Health",
+    summary: "Basic health check and RPC pool status",
+    auth: false,
+    rateLimit: null,
+    responseExample: {
+      status: "ok",
+      rpc: { ok: true, pool: {} },
+      db: { totalEvents: 0, daoCount: 0, lastLedger: 0 },
     },
-    schemas: {
-      VoteRequest: {
-        type: "object",
-        required: ["daoId", "proposalId", "choice", "nullifier", "root", "proof"],
-        properties: {
-          daoId: { type: "integer" },
-          proposalId: { type: "integer" },
-          choice: { type: "boolean" },
-          nullifier: { type: "string", description: "BN254 field element hex < modulus (redacted in audit)" },
-          root: { type: "string", description: "Merkle root hex (redacted in audit)" },
-          proof: { type: "object", description: "Groth16 proof (redacted in audit)", properties: { a: { type: "string" }, b: { type: "string" }, c: { type: "string" } } },
-        },
-      },
-      AuditEntry: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          timestamp: { type: "string", format: "date-time" },
-          requestId: { type: "string" },
-          method: { type: "string" },
-          path: { type: "string" },
-          action: { type: "string" },
-          actor: { type: "string", description: "Hashed actor identifier (PII redacted)" },
-          statusCode: { type: "integer" },
-          immutable: { type: "boolean", enum: [true] },
-        },
-      },
-      RemediationAction: {
-        type: "object",
-        required: ["action", "target", "reason", "idempotencyKey"],
-        properties: {
-          action: { type: "string", enum: ["freeze_dao", "unfreeze_dao", "pause_voting", "resume_voting", "revoke_member", "restore_member", "emergency_pause", "emergency_resume", "rotate_vk", "quarantine_proposal"] },
-          target: { type: "string", description: "DAO or proposal identifier" },
-          reason: { type: "string", minLength: 5 },
-          idempotencyKey: { type: "string", minLength: 8, description: "Replay protection - duplicate keys return 409" },
-          metadata: { type: "object", additionalProperties: true },
-        },
-      },
+    responseSchema: healthResponseSchema,
+  },
+  {
+    method: "get",
+    path: "/ready",
+    tag: "Health",
+    summary: "Readiness check (verifies RPC connectivity)",
+    auth: false,
+    rateLimit: null,
+    responseExample: { status: "ready" },
+    responseSchema: readyResponseSchema,
+    errorStatuses: [503],
+  },
+  {
+    method: "get",
+    path: "/config",
+    tag: "Health",
+    summary: "Public configuration for frontend clients",
+    auth: false,
+    rateLimit: null,
+    responseExample: {
+      votingContract: "C...",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      ipfsEnabled: true,
+    },
+    responseSchema: configResponseSchema,
+  },
+  {
+    method: "get",
+    path: "/db/stats",
+    tag: "Health",
+    summary: "Database diagnostics (full detail requires auth)",
+    auth: true,
+    rateLimit: null,
+    responseExample: { queries: {}, tables: [], cache: {} },
+  },
+  // ---- Voting ----
+  {
+    method: "post",
+    path: "/vote",
+    tag: "Voting",
+    summary: "Submit an anonymous vote with a ZK proof",
+    auth: true,
+    rateLimit: "voteLimiter",
+    body: voteSchema,
+    responseExample: {
+      success: true,
+      txHash: "a1b2c3...64hex",
+      status: "SUCCESS",
+    },
+    responseSchema: successResponseSchema,
+    errorStatuses: [400, 401, 429, 500, 503, 504],
+  },
+  {
+    method: "get",
+    path: "/proposal/:daoId/:proposalId",
+    tag: "Voting",
+    summary: "Get proposal vote tallies",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: {
+      daoId: idParam("0", "DAO identifier"),
+      proposalId: idParam("1", "Proposal identifier"),
+    },
+    responseExample: { daoId: 0, proposalId: 1, yesVotes: 12, noVotes: 3 },
+  },
+  {
+    method: "get",
+    path: "/root/:daoId",
+    tag: "Voting",
+    summary: "Get the current membership merkle root for a DAO",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("0", "DAO identifier") },
+    responseExample: { daoId: 0, root: "0x..." },
+  },
+  // ---- Comments ----
+  {
+    method: "post",
+    path: "/comment/anonymous",
+    tag: "Comments",
+    summary: "Submit an anonymous comment with a ZK proof",
+    auth: true,
+    rateLimit: "commentLimiter",
+    body: anonymousCommentSchema,
+    responseExample: { success: true, commentId: 42, txHash: "a1b2c3...64hex" },
+    responseSchema: successResponseSchema,
+    errorStatuses: [400, 401, 429, 500, 503, 504],
+  },
+  {
+    method: "get",
+    path: "/comment/challenge/:commitment",
+    tag: "Comments",
+    summary: "Get a proof-of-work challenge for a commitment (anti-spam)",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { commitment: idParam("0x1234...64hex", "Commitment hash") },
+    responseExample: {
+      serverId: "abc123",
+      difficulty: 20,
+      expiresAt: 1785200000000,
+    },
+  },
+  {
+    method: "get",
+    path: "/comments/:daoId/:proposalId/nonce",
+    tag: "Comments",
+    summary: "Get the next comment nonce for a commitment",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: {
+      daoId: idParam("0", "DAO identifier"),
+      proposalId: idParam("1", "Proposal identifier"),
+    },
+    responseExample: { nonce: 0 },
+  },
+  {
+    method: "get",
+    path: "/comments/:daoId/:proposalId",
+    tag: "Comments",
+    summary: "List comments for a proposal (paginated)",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: {
+      daoId: idParam("0", "DAO identifier"),
+      proposalId: idParam("1", "Proposal identifier"),
+    },
+    query: {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 100 }),
+      cursor: z.string().optional().openapi({ example: "eyJpIjoxMjN9" }),
+    },
+    responseExample: {
+      data: [],
+      pagination: { cursor: undefined, hasMore: false, total: 0 },
     },
   },
   paths: {
@@ -176,12 +400,169 @@ export const openApiSpec = {
         responses: { "200": { description: "Exported logs" } },
       },
     },
-    "/audit/stats": {
-      get: {
-        summary: "Audit statistics",
-        security: [{ relayerAuth: [] }],
-        responses: { "200": { description: "Stats" } },
+  },
+  // ---- Proposal search (#377) ----
+  {
+    method: "get",
+    path: "/proposals/:daoId",
+    tag: "DAOs",
+    summary: "Search and filter proposals for a DAO",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    query: {
+      status: z
+        .enum(["active", "closed", "all"])
+        .optional()
+        .openapi({ example: "active" }),
+      search: z
+        .string()
+        .optional()
+        .openapi({ example: "fund development" }),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 20 }),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .openapi({ example: 0 }),
+    },
+    responseExample: {
+      data: [
+        {
+          proposalId: 1,
+          title: "Fund development",
+          endTime: 1900000000,
+          closed: false,
+          txHash: null,
+          timestamp: "2026-08-30T00:00:00.000Z",
+        },
+      ],
+      pagination: { cursor: undefined, hasMore: false, total: 1 },
+      filters: { status: "active", search: "fund" },
+    },
+  },
+  // ---- VDF + Threshold Randomness (#310) ----
+  {
+    method: "post",
+    path: "/randomness/seed",
+    tag: "Randomness",
+    summary: "Compute VDF seed for proposal ordering (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      vdfInput: "a1b2c3d4e5f6...",
+      vdfOutput: "f6e5d4c3b2a1...",
+      iterations: 100000,
+      replayNonce: "deadbeef...",
+      checkpointCount: 16,
+      requiredShares: 2,
+      sharesReceived: 0,
+      status: "awaiting_shares",
+    },
+    errorStatuses: [400, 401, 409, 500],
+  },
+  {
+    method: "post",
+    path: "/randomness/contribute",
+    tag: "Randomness",
+    summary: "Submit a threshold-RNG share (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      authorityId: "authority-1",
+      sharesReceived: 1,
+      requiredShares: 2,
+      ready: false,
+      status: "awaiting_shares",
+    },
+    errorStatuses: [400, 401, 404, 409, 500],
+  },
+  {
+    method: "post",
+    path: "/randomness/finalize",
+    tag: "Randomness",
+    summary: "Finalize ordering from VDF + threshold shares (admin only)",
+    auth: true,
+    rateLimit: null,
+    responseExample: {
+      success: true,
+      daoId: 1,
+      ordering: [3, 1, 2],
+      combinedSeed: "a1b2c3d4...",
+      replayNonce: "deadbeef...",
+      finalizedAt: 1722300000000,
+      status: "finalized",
+    },
+    errorStatuses: [400, 401, 404, 500],
+  },
+  {
+    method: "get",
+    path: "/randomness/ordering/:daoId",
+    tag: "Randomness",
+    summary: "Fetch the committed proposal ordering for a DAO",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    responseExample: {
+      daoId: 1,
+      ordering: [3, 1, 2],
+      proposalIds: [1, 2, 3],
+      replayNonce: "deadbeef...",
+      vdfIterations: 100000,
+      checkpointCount: 16,
+      sharesUsed: 2,
+      finalizedAt: 1722300000000,
+      committed: true,
+      status: "finalized",
+    },
+    errorStatuses: [404, 500],
+  },
+  {
+    method: "get",
+    path: "/randomness/verify/:daoId",
+    tag: "Randomness",
+    summary: "Verify the stored proposal ordering is reproducible",
+    auth: false,
+    rateLimit: "queryLimiter",
+    params: { daoId: idParam("1", "DAO identifier") },
+    responseExample: {
+      daoId: 1,
+      valid: true,
+      checks: {
+        vdfOutputValid: true,
+        replayNonceValid: true,
+        orderingValid: true,
       },
+      replayNonce: "deadbeef...",
+      finalizedAt: 1722300000000,
+    },
+    errorStatuses: [404, 500],
+  },
+  // ---- Admin ----
+  {
+    method: "get",
+    path: "/admin/audit-log",
+    tag: "Admin",
+    summary: "Paginated, hash-chain-verifiable audit log review (admin only)",
+    auth: true,
+    rateLimit: "queryLimiter",
+    query: {
+      limit: z.string().optional().openapi({ example: "50" }),
+      offset: z.string().optional().openapi({ example: "0" }),
+      action: z.string().optional().openapi({ example: "vote_relay" }),
+      format: z.enum(["json", "cef"]).optional(),
+      verify: z.enum(["true", "false"]).optional(),
     },
   },
   "x-audit": {
