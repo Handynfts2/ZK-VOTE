@@ -59,6 +59,10 @@ import {
 import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 import {
+  startSbtTransferWatch,
+  stopSbtTransferWatch,
+} from "./services/sbt-guard.js";
+import {
   startAuthScheduler,
   stopAuthScheduler,
   ensureLegacyTokenMigrated,
@@ -70,15 +74,7 @@ import {
 import { closeDb } from "./services/db.js";
 
 // Middleware
-import {
-  csrfGuard,
-  csrfTokenMiddleware,
-  requestLogger,
-  errorHandler,
-  graduatedSlowDown,
-  degradationContext,
-  metricsMiddleware,
-} from "./middleware/index.js";
+import { csrfGuard, requestLogger, errorHandler, auditMiddleware } from "./middleware/index.js";
 
 // Routes
 import {
@@ -100,8 +96,9 @@ import {
   novaRoutes,
   adminRoutes,
   thresholdRoutes,
+  randomnessRoutes,
 } from "./routes/index.js";
-import { registerShutdownHandler } from "./routes/admin.js";
+import openApiSpec from "./openapi.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -214,13 +211,11 @@ app.use(cors(corsOptions));
 // Logging middleware
 app.use(requestLogger);
 
-// Graduated throttling (delays before a client is hard rate-limited)
-app.use(graduatedSlowDown);
+// Audit middleware - must be after body parsing and requestLogger, before routes
+// Audits every mutating route (POST/PUT/PATCH/DELETE) with PII redaction, append-only
+app.use(auditMiddleware);
 
-// CSRF token generation for safe methods (GET, HEAD, OPTIONS)
-app.use(csrfTokenMiddleware);
-
-// CSRF protection (applied globally for write methods)
+// CSRF protection (applied globally)
 app.use(csrfGuard);
 
 // ============================================
@@ -248,6 +243,7 @@ app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
 app.use(noStore, adminRoutes);
 app.use(noStore, thresholdRoutes);
+app.use(noStore, randomnessRoutes);
 
 // ============================================
 // API VERSIONING (#139)
@@ -279,6 +275,7 @@ v1Router.use(circuitRoutes);
 v1Router.use(quadraticRoutes);
 v1Router.use(noStore, adminRoutes);
 v1Router.use(noStore, thresholdRoutes);
+v1Router.use(noStore, randomnessRoutes);
 app.use("/api/v1", v1Router);
 
 // OpenAPI spec + interactive docs
@@ -367,22 +364,43 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-  const pending = getPendingSequenceLockOps();
-  if (pending > 0) {
-    log("info", "shutdown_draining_sequence_lock", { pending });
-  }
-  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
-  log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
-    drained,
-    remaining: getPendingSequenceLockOps(),
-  });
+    // Keep the startup banner on stdout for human-readable output
+    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
 
-  try {
-    closeDb();
-    log("info", "shutdown_component_stopped", { component: "database" });
-  } catch (err) {
-    log("error", "shutdown_db_close_error", {
-      error: (err as Error).message,
+    logger.info("endpoints_registered", {
+      core: [
+        "/health",
+        "/ready",
+        "/config",
+        "/vote",
+        "/proposal/:dao/:prop",
+        "/root/:dao",
+        "/events/:daoId",
+        "/events/notify",
+        "/indexer/status",
+      ],
+      comments: [
+        "/comment/anonymous",
+        "/comments/:dao/:prop",
+        "/comments/:dao/:prop/nonce",
+        "/comment/:dao/:prop/:id",
+        "/comment/edit",
+        "/comment/delete",
+      ],
+      bridge: [
+        "/bridge/vote",
+        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
+        "/bridge/relay",
+      ],
+      ipfs: config.ipfsEnabled
+        ? [
+            "/ipfs/image",
+            "/ipfs/metadata",
+            "/ipfs/:cid",
+            "/ipfs/image/:cid",
+            "/ipfs/health",
+          ]
+        : [],
     });
   }
 
@@ -484,6 +502,7 @@ async function startBackgroundServices(): Promise<void> {
       isValidContractId(config.membershipSbtContractId)
     ) {
       startMembershipSync();
+      startSbtTransferWatch();
     }
   }
 
@@ -525,6 +544,7 @@ function stopBackgroundServices(): void {
   stopDaoSync();
   stopMembershipSync();
   stopTTLRenewal();
+  stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
 }

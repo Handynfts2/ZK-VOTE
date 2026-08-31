@@ -4018,3 +4018,70 @@ fn test_set_merkle_root_commitment_window_expired_fails() {
     let new_root = U256::from_u32(&env, 200);
     voting_client.set_merkle_root(&1u64, &proposal_id, &new_root, &admin);
 }
+
+#[test]
+fn test_storage_layout_exposes_client_negotiation_metadata() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+
+    assert_eq!(voting_client.version(), 2);
+    assert_eq!(voting_client.storage_version(), 1);
+
+    let layout = voting_client.storage_layout();
+    assert_eq!(layout.contract_version, 2);
+    assert_eq!(layout.storage_version, 1);
+    assert_eq!(layout.latest_migration_at, 0);
+    assert_eq!(layout.rollback_to_version, None);
+}
+
+#[test]
+fn test_migration_for_version_round_trips_existing_record() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let payload_hash = BytesN::from_array(&env, &[9u8; 32]);
+    let migration = ContractMigrationInfo {
+        from_version: 1,
+        to_version: 2,
+        storage_version: 1,
+        payload_hash: payload_hash.clone(),
+        applied_at: env.ledger().timestamp(),
+    };
+
+    env.as_contract(&voting_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeMigration(2), &migration);
+    });
+
+    let fetched = voting_client.migration_for_version(&2u32).unwrap();
+    assert_eq!(fetched.from_version, 1);
+    assert_eq!(fetched.to_version, 2);
+    assert_eq!(fetched.storage_version, 1);
+    assert_eq!(fetched.payload_hash, payload_hash);
+}
+
+#[test]
+fn test_storage_layout_reports_rollback_marker() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+
+    env.as_contract(&voting_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeRollback(2), &1u32);
+    });
+
+    let layout = voting_client.storage_layout();
+    assert_eq!(layout.rollback_to_version, Some(1));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #66)")]
+fn test_registry_upgrade_hook_rejects_version_mismatch_before_wasm_update() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let wasm_hash = BytesN::from_array(&env, &[4u8; 32]);
+    let migration_payload = Bytes::from_array(&env, b"noop");
+
+    voting_client.apply_upgrade_from_registry(&wasm_hash, &1u32, &3u32, &1u32, &migration_payload);
+}

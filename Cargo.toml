@@ -7,14 +7,8 @@ members = [
     "contracts/membership-tree",
     "contracts/voting",
     "contracts/comments",
-    "contracts/poc-bls12-381",
     "contracts/bridge/soroban",
     "contracts/circuit-registry",
-    "contracts/token",
-    "contracts/vdf",
-    "crates/nova-aggregator",
-    "contracts/threshold-crypto",
-    "contracts/rewards",
     "tests/integration",
 ]
 default-members = [

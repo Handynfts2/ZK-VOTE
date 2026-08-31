@@ -118,6 +118,15 @@ pub struct ReinstatementEvent {
 
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
+pub struct ExclusionProofVerified {
+    #[topic]
+    pub dao_id: u64,
+    pub commitment: U256,
+    pub is_revoked: bool,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractUpgraded {
     pub from: u32,
     pub to: u32,
@@ -953,6 +962,32 @@ impl MembershipTree {
             Self::bump_persistent(&env, &key);
         }
         result
+    }
+
+    /// Verify exclusion proof: check if a commitment is NOT in the current tree
+    /// Used by voting contract to enforce that revoked members cannot vote
+    /// Returns true if commitment has been revoked and is not in tree
+    pub fn verify_exclusion(env: Env, dao_id: u64, commitment: U256) -> bool {
+        Self::bump_instance(&env);
+
+        let revocation_ts = Self::revok_at(env.clone(), dao_id, commitment.clone());
+        if revocation_ts.is_none() {
+            return false;
+        }
+
+        let leaf_index_key = DataKey::LeafIndex(dao_id, commitment.clone());
+        let leaf_value_key = if let Some(index) = env.storage().persistent().get::<_, Option<u32>>(&leaf_index_key) {
+            Some(DataKey::LeafValue(dao_id, index.unwrap_or(0)))
+        } else {
+            None
+        };
+
+        if let Some(key) = leaf_value_key {
+            let current_value: U256 = env.storage().persistent().get(&key).unwrap_or_else(|| U256::zero(&env));
+            current_value == Self::zero_value(&env)
+        } else {
+            true
+        }
     }
 
     // Internal: Insert leaf and update tree

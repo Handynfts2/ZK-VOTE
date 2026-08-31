@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, Env, String};
+use soroban_sdk::{testutils::Address as _, Bytes, BytesN, Env, String};
 
 #[test]
 fn test_create_dao() {
@@ -408,4 +408,95 @@ fn test_set_proposal_mode_non_admin_fails() {
 
     // Non-admin tries to change proposal mode - should fail with NotAdmin error (code #3)
     client.set_proposal_mode(&dao_id, &false, &non_admin);
+}
+
+#[test]
+fn test_propose_contract_upgrade_records_timelock_metadata() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Upgrade DAO"),
+        &admin,
+        &false,
+        &false,
+        &None,
+    );
+    let target_contract = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let rollback_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+    let eta = env.ledger().timestamp() + 86_400;
+    let expires_at = eta + 86_400;
+    let migration_payload = Bytes::from_array(&env, b"migrate:v2");
+
+    let proposal_id = client.propose_contract_upgrade(
+        &dao_id,
+        &target_contract,
+        &wasm_hash,
+        &rollback_wasm_hash,
+        &1u32,
+        &2u32,
+        &2u32,
+        &migration_payload,
+        &eta,
+        &expires_at,
+        &admin,
+    );
+
+    let proposal = client.get_contract_upgrade_proposal(&dao_id, &proposal_id);
+    assert_eq!(proposal.dao_id, dao_id);
+    assert_eq!(proposal.target_contract, target_contract);
+    assert_eq!(proposal.wasm_hash, wasm_hash);
+    assert_eq!(proposal.rollback_wasm_hash, rollback_wasm_hash);
+    assert_eq!(proposal.from_version, 1);
+    assert_eq!(proposal.to_version, 2);
+    assert_eq!(proposal.storage_version, 2);
+    assert_eq!(proposal.migration_payload, migration_payload);
+    assert_eq!(proposal.eta, eta);
+    assert_eq!(proposal.expires_at, expires_at);
+    assert!(!proposal.executed);
+    assert!(!proposal.rolled_back);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_propose_contract_upgrade_requires_min_timelock() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Upgrade DAO"),
+        &admin,
+        &false,
+        &false,
+        &None,
+    );
+    let target_contract = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let rollback_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+    let eta = env.ledger().timestamp() + 60;
+    let expires_at = eta + 86_400;
+    let migration_payload = Bytes::new(&env);
+
+    client.propose_contract_upgrade(
+        &dao_id,
+        &target_contract,
+        &wasm_hash,
+        &rollback_wasm_hash,
+        &1u32,
+        &2u32,
+        &2u32,
+        &migration_payload,
+        &eta,
+        &expires_at,
+        &admin,
+    );
 }

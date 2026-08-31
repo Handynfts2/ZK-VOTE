@@ -27,10 +27,7 @@ delete process.env.DAO_REGISTRY_CONTRACT_ID;
 delete process.env.MEMBERSHIP_SBT_CONTRACT_ID;
 
 const { app } = await import("../src/index.ts");
-const {
-  initDb,
-  closeDb,
-} = await import("../src/services/db.js");
+const { initDb, closeDb } = await import("../src/services/db.js");
 
 const auth = {
   Authorization: "Bearer route-coverage-token",
@@ -47,7 +44,7 @@ test("backend route matrix covers deterministic success and failure paths", asyn
   let response = await request(app).get("/daos");
 
   assert.equal(response.statusCode, 200);
-  assert.ok(Array.isArray(response.body.daos));
+  assert.ok(Array.isArray(response.body.data));
 
   response = await request(app).get("/dao/999999");
 
@@ -56,9 +53,7 @@ test("backend route matrix covers deterministic success and failure paths", asyn
     error: "DAO not found in cache",
   });
 
-  response = await request(app)
-    .post("/daos/sync")
-    .set(auth);
+  response = await request(app).post("/daos/sync").set(auth);
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.body, {
@@ -95,10 +90,7 @@ test("backend route matrix covers deterministic success and failure paths", asyn
   assert.equal(response.statusCode, 200);
   assert.ok(Array.isArray(response.body.daos));
 
-  response = await request(app)
-    .post("/events")
-    .set(auth)
-    .send({});
+  response = await request(app).post("/events").set(auth).send({});
 
   assert.equal(response.statusCode, 400);
 
@@ -122,25 +114,18 @@ test("backend route matrix covers deterministic success and failure paths", asyn
   assert.ok(Array.isArray(response.body.events));
   assert.ok(response.body.events.length >= 1);
 
-  response = await request(app)
-    .post("/events/notify")
-    .set(auth)
-    .send({});
+  response = await request(app).post("/events/notify").set(auth).send({});
 
   assert.equal(response.statusCode, 400);
 
-  response = await request(app)
-    .post("/bridge/relay")
-    .set(auth);
+  response = await request(app).post("/bridge/relay").set(auth);
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.success, true);
 
   const commitment = "a".repeat(64);
 
-  response = await request(app).get(
-    `/comment/challenge/${commitment}`,
-  );
+  response = await request(app).get(`/comment/challenge/${commitment}`);
 
   assert.equal(response.statusCode, 200);
   assert.equal(typeof response.body, "object");
@@ -150,17 +135,11 @@ test("backend route matrix covers deterministic success and failure paths", asyn
 
   assert.equal(response.statusCode, 400);
 
-  response = await request(app)
-    .post("/comment/edit")
-    .set(auth)
-    .send({});
+  response = await request(app).post("/comment/edit").set(auth).send({});
 
   assert.equal(response.statusCode, 400);
 
-  response = await request(app)
-    .post("/comment/delete")
-    .set(auth)
-    .send({});
+  response = await request(app).post("/comment/delete").set(auth).send({});
 
   assert.equal(response.statusCode, 400);
 
@@ -180,9 +159,7 @@ test("backend route matrix covers deterministic success and failure paths", asyn
 
   const nullifier = `0x${"1".repeat(64)}`;
 
-  response = await request(app).get(
-    `/bridge/nullifier/1/1/${nullifier}`,
-  );
+  response = await request(app).get(`/bridge/nullifier/1/1/${nullifier}`);
 
   assert.equal(response.statusCode, 500);
 });

@@ -10,6 +10,7 @@ import {
   modInverse,
   issueCredential,
   BlindSignatureError,
+  buildDidAttributeProofSeed,
 } from "../src/services/blindSignature.js";
 
 // Use a smaller modulus for fast tests; correctness of the modular
@@ -163,4 +164,52 @@ test("unlinkability: issuer cannot recover the message from the blinded value al
   }
   const blindedValues = pairs.map((p) => p.blinded.toString());
   assert.equal(new Set(blindedValues).size, blindedValues.length);
+});
+
+test("DID attribute seed: validates threshold and hashes signed claim into field inputs", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claim = {
+    issuer: "did:web:issuer.example",
+    subjectDid: "did:example:holder",
+    attributeKey: "simAgeDays",
+    attributeValue: 90,
+    issuedAt: now - 60,
+    expiresAt: now + 3600,
+    signature: "issuer-signature",
+  };
+
+  const seed = buildDidAttributeProofSeed(claim, 30);
+
+  assert.equal(seed.minAttributeValue, "30");
+  assert.equal(seed.attributeValue, "90");
+  assert.match(seed.issuerId, /^\d+$/);
+  assert.match(seed.attributeKey, /^\d+$/);
+  assert.match(seed.signedClaimHash, /^\d+$/);
+});
+
+test("DID attribute seed: rejects expired or insufficient claims", () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claim = {
+    issuer: "did:web:issuer.example",
+    subjectDid: "did:example:holder",
+    attributeKey: "simAgeDays",
+    attributeValue: 7,
+    issuedAt: now - 60,
+    expiresAt: now + 3600,
+    signature: "issuer-signature",
+  };
+
+  assert.throws(() => buildDidAttributeProofSeed(claim, 30), BlindSignatureError);
+  assert.throws(
+    () =>
+      buildDidAttributeProofSeed(
+        {
+          ...claim,
+          attributeValue: 90,
+          expiresAt: now - 1,
+        },
+        30,
+      ),
+    BlindSignatureError,
+  );
 });

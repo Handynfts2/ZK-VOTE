@@ -72,6 +72,43 @@ async function rpcHealth(): Promise<{
 }
 
 /**
+ * GET /healthz
+ * Kubernetes liveness probe (process is alive)
+ * Returns 200 if process is running, 503 if critically degraded
+ */
+router.get("/healthz", async (req: Request, res: Response) => {
+  const memory = getMemorySnapshot();
+  const services = getOverallHealth();
+
+  const rpc = config.healthcheckPing ? await rpcHealth() : { ok: true };
+  if (rpc.ok) {
+    markHealthy("soroban_rpc");
+  } else {
+    markUnavailable("soroban_rpc", rpc.error ?? "RPC unhealthy");
+  }
+
+  const httpStatus = services.status === "ok" ? 200 : 503;
+
+  const response: Record<string, unknown> = {
+    status: services.status,
+    timestamp: new Date().toISOString(),
+  };
+
+  if (config.healthExposeDetails) {
+    const token = extractAuthToken(req);
+    if (token === config.relayerAuthToken) {
+      response.services = services;
+      response.memory = {
+        rssMb: Math.round(memory.rss / 1024 / 1024),
+        heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      };
+    }
+  }
+
+  return res.status(httpStatus).json(response);
+});
+
+/**
  * GET /health
  * Basic health check
  */
@@ -129,6 +166,59 @@ router.get("/health", async (req: Request, res: Response) => {
   }
 
   res.json(base);
+});
+
+/**
+ * GET /readyz
+ * Kubernetes readiness probe (verifies RPC and DB connectivity)
+ * Returns 200 if ready to accept traffic, 503 if degraded
+ */
+router.get("/readyz", async (req: Request, res: Response) => {
+  try {
+    const rpcStatus = await rpcHealth();
+    let dbHealth: Record<string, unknown> = { available: false };
+
+    try {
+      const database = getDb();
+      dbHealth = {
+        ...getWalHealth(database, ""),
+        status: getDbStatus(),
+      };
+    } catch (dbErr) {
+      dbHealth = { available: false, error: (dbErr as Error).message };
+    }
+
+    const isRpcOk = rpcStatus.ok;
+    const isDbOk = dbHealth.available !== false;
+
+    const overallStatus = isRpcOk && isDbOk ? "ready" : "not_ready";
+    const httpStatus = isRpcOk && isDbOk ? 200 : 503;
+
+    const base: Record<string, unknown> = {
+      status: overallStatus,
+      dependencies: {
+        rpc: isRpcOk ? "ok" : "unavailable",
+        db: isDbOk ? "ok" : "unavailable",
+      },
+    };
+
+    if (config.healthExposeDetails) {
+      const token = extractAuthToken(req);
+      if (token === config.relayerAuthToken) {
+        base.details = {
+          rpc: rpcStatus,
+          db: dbHealth,
+        };
+      }
+    }
+
+    return res.status(httpStatus).json(base);
+  } catch (err) {
+    log("error", "readyz_check_failed", { error: (err as Error).message });
+    return res
+      .status(503)
+      .json({ status: "error", message: (err as Error).message });
+  }
 });
 
 /**

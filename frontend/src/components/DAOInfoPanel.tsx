@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
@@ -274,7 +274,7 @@ export default function DAOInfoPanel({
 
       if (publicKey) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           // Test if account exists by making a simple call
           await clients.daoRegistry.get_dao({ dao_id: BigInt(daoId) });
           // If successful, use authenticated clients (same interface as read-only)

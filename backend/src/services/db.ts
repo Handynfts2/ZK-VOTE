@@ -469,6 +469,7 @@ const ALLOWED_EVENT_TYPES = new Set([
   "proposal_closed",
   "proposal_archived",
   "vote_cast",
+  "sbt_transfer_attempt",
 ]);
 
 /** Allowlisted column names for dynamic ORDER BY clauses */
@@ -1655,16 +1656,21 @@ export function addEvent(event: EventInput): boolean {
     throw new Error(`Invalid event type: ${event.type}`);
   }
 
-  const queryObj = (kysely as any)
-    .insertInto(sql<any>`${sql.raw(tableName)}`.as("events"))
-    .values({
-      type: event.type,
-      data: JSON.stringify(event.data),
-      ledger: event.ledger ?? null,
-      tx_hash: event.txHash ?? null,
-      timestamp: event.timestamp ?? new Date().toISOString(),
-      verified: event.verified ? 1 : 0,
-    });
+  // NOTE (pre-existing bug, found while adding sbt_transfer_attempt events
+  // for #357): kysely@0.29's insertInto() calls `from.includes(...)`
+  // internally, so it requires a plain string table identifier — passing a
+  // `sql\`...\`.as(...)` raw expression throws "from.includes is not a
+  // function" and every addEvent() call fails. `tableName` is already a
+  // safe, validated identifier (partitionTableName() derives it from a
+  // range-checked numeric DAO ID), so a plain string is correct here anyway.
+  const queryObj = (kysely as any).insertInto(tableName).values({
+    type: event.type,
+    data: JSON.stringify(event.data),
+    ledger: event.ledger ?? null,
+    tx_hash: event.txHash ?? null,
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    verified: event.verified ? 1 : 0,
+  });
   const compiled = queryObj.compile();
 
   const result = timeQuery(

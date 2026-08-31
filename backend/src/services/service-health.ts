@@ -33,7 +33,8 @@ export type ServiceName =
   | "comments"
   | "indexer"
   | "dao_sync"
-  | "ttl_renewal";
+  | "ttl_renewal"
+  | "sbt_transfer_watch";
 
 export interface ServiceHealthEntry {
   name: ServiceName;
@@ -92,6 +93,10 @@ const SERVICE_META: Record<
   ttl_renewal: {
     tier: "background",
     description: "Contract TTL renewal",
+  },
+  sbt_transfer_watch: {
+    tier: "background",
+    description: "Membership SBT transfer-attempt monitor",
   },
 };
 

@@ -41,7 +41,7 @@
  * larger, separate change and is out of scope here (see PR description).
  */
 
-import { generateKeyPairSync, KeyObject } from "node:crypto";
+import { createHash, generateKeyPairSync, KeyObject } from "node:crypto";
 
 /** RSA public parameters used to blind-sign credentials. */
 export interface RsaBlindPublicKey {
@@ -227,4 +227,83 @@ export function issueCredential(
   const blindSig = signBlinded(blinded, key);
   const signature = unblind(blindSig, r, pub);
   return { signature, blindedSentToIssuer: blinded };
+}
+
+const BN254_FR =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+export interface DidSignedClaim {
+  issuer: string;
+  subjectDid: string;
+  attributeKey: string;
+  attributeValue: number;
+  issuedAt: number;
+  expiresAt: number;
+  signature: string;
+}
+
+export interface DidAttributeProofSeed {
+  issuerId: string;
+  attributeKey: string;
+  minAttributeValue: string;
+  signedClaimHash: string;
+  attributeValue: string;
+}
+
+function hashToField(value: string): bigint {
+  const digest = createHash("sha256").update(value).digest("hex");
+  return BigInt(`0x${digest}`) % BN254_FR;
+}
+
+function canonicalClaimPayload(claim: DidSignedClaim): string {
+  return JSON.stringify({
+    issuer: claim.issuer,
+    subjectDid: claim.subjectDid,
+    attributeKey: claim.attributeKey,
+    attributeValue: claim.attributeValue,
+    issuedAt: claim.issuedAt,
+    expiresAt: claim.expiresAt,
+  });
+}
+
+export function validateDidSignedClaim(
+  claim: DidSignedClaim,
+  now = Math.floor(Date.now() / 1000),
+): void {
+  if (!claim.issuer || !claim.subjectDid || !claim.attributeKey) {
+    throw new BlindSignatureError("DID claim is missing required fields");
+  }
+  if (!Number.isSafeInteger(claim.attributeValue) || claim.attributeValue < 0) {
+    throw new BlindSignatureError(
+      "DID claim attributeValue must be a safe non-negative integer",
+    );
+  }
+  if (claim.issuedAt > now || claim.expiresAt <= now) {
+    throw new BlindSignatureError("DID claim is not currently valid");
+  }
+  if (!claim.signature) {
+    throw new BlindSignatureError("DID claim signature is required");
+  }
+}
+
+export function buildDidAttributeProofSeed(
+  claim: DidSignedClaim,
+  minAttributeValue: number,
+): DidAttributeProofSeed {
+  validateDidSignedClaim(claim);
+  if (minAttributeValue < 0 || claim.attributeValue < minAttributeValue) {
+    throw new BlindSignatureError(
+      "DID claim does not satisfy requested threshold",
+    );
+  }
+
+  return {
+    issuerId: hashToField(claim.issuer).toString(),
+    attributeKey: hashToField(claim.attributeKey).toString(),
+    minAttributeValue: minAttributeValue.toString(),
+    signedClaimHash: hashToField(
+      `${canonicalClaimPayload(claim)}.${claim.signature}`,
+    ).toString(),
+    attributeValue: claim.attributeValue.toString(),
+  };
 }

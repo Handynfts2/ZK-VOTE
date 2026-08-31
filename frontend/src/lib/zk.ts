@@ -345,3 +345,124 @@ export async function computeCommitment(
   );
   return commitment;
 }
+
+const BN254_FR = BigInt(
+  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+);
+
+export interface DidAttributeClaimSeed {
+  issuerId: string;
+  attributeKey: string;
+  minAttributeValue: string;
+  signedClaimHash: string;
+  attributeValue: string;
+  claimSalt?: string;
+}
+
+export interface DidAttributeCircuitInput {
+  issuerId: string;
+  attributeKey: string;
+  minAttributeValue: string;
+  attributeNullifier: string;
+  signedClaimHash: string;
+  attributeValue: string;
+  claimSalt: string;
+}
+
+export interface ReputationAttestationSeed {
+  sourceDaoId: string;
+  targetDaoId: string;
+  attesterKeyHash: string;
+  minScore: string;
+  subjectSecret: string;
+  score: string;
+  attestationSalt: string;
+  revocationNonce?: string;
+}
+
+export interface ReputationAttestationCircuitInput {
+  sourceDaoId: string;
+  targetDaoId: string;
+  attesterKeyHash: string;
+  minScore: string;
+  attestationCommitment: string;
+  reputationNullifier: string;
+  subjectSecret: string;
+  score: string;
+  attestationSalt: string;
+  revocationNonce: string;
+}
+
+async function hashTextToField(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return (BigInt(`0x${hex}`) % BN254_FR).toString();
+}
+
+export async function buildDidAttributeCircuitInput(
+  seed: DidAttributeClaimSeed,
+): Promise<DidAttributeCircuitInput> {
+  const poseidon = await buildPoseidon();
+  const claimSalt =
+    seed.claimSalt ?? (await hashTextToField(seed.signedClaimHash));
+  const attributeNullifier = poseidon.F.toString(
+    poseidon([
+      BigInt(seed.issuerId),
+      BigInt(seed.attributeKey),
+      BigInt(seed.signedClaimHash),
+      BigInt(claimSalt),
+    ]),
+  );
+
+  return {
+    issuerId: seed.issuerId,
+    attributeKey: seed.attributeKey,
+    minAttributeValue: seed.minAttributeValue,
+    attributeNullifier,
+    signedClaimHash: seed.signedClaimHash,
+    attributeValue: seed.attributeValue,
+    claimSalt,
+  };
+}
+
+export async function buildReputationAttestationCircuitInput(
+  seed: ReputationAttestationSeed,
+): Promise<ReputationAttestationCircuitInput> {
+  const poseidon = await buildPoseidon();
+  const revocationNonce = seed.revocationNonce ?? "0";
+  const attestationCommitment = poseidon.F.toString(
+    poseidon([
+      BigInt(seed.sourceDaoId),
+      BigInt(seed.attesterKeyHash),
+      BigInt(seed.subjectSecret),
+      BigInt(seed.score),
+      BigInt(seed.attestationSalt),
+    ]),
+  );
+  const reputationNullifier = poseidon.F.toString(
+    poseidon([
+      BigInt(seed.targetDaoId),
+      BigInt(attestationCommitment),
+      BigInt(seed.subjectSecret),
+      BigInt(revocationNonce),
+    ]),
+  );
+
+  return {
+    sourceDaoId: seed.sourceDaoId,
+    targetDaoId: seed.targetDaoId,
+    attesterKeyHash: seed.attesterKeyHash,
+    minScore: seed.minScore,
+    attestationCommitment,
+    reputationNullifier,
+    subjectSecret: seed.subjectSecret,
+    score: seed.score,
+    attestationSalt: seed.attestationSalt,
+    revocationNonce,
+  };
+}
