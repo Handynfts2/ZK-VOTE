@@ -98,6 +98,9 @@ export interface VoteRequest {
   proof: Groth16Proof;
   voterPublicKey?: string;
   voterSignature?: string;
+  sponsor?: "relayer" | "voter";
+  feePayer?: string;
+  feeBudgetStroops?: number;
 }
 
 // ============================================
@@ -248,10 +251,35 @@ export interface StructuredError {
   message: string;
   details?: unknown;
   requestId: string;
-  traceId?: string;
+  traceId: string;
   timestamp: string;
 }
 
 export interface ApiErrorResponse {
   error: StructuredError;
 }
+
+// ============================================
+// SCHEMA-INFERRED REQUEST TYPES
+// ============================================
+//
+// The canonical request types are derived from the shared Zod schemas in
+// validation/schemas.ts. They are re-exported here so `types` remains the
+// single import surface for request payloads across routes and tests.
+
+export type {
+  BridgeVoteRequest,
+  CreateTokenRequest,
+  TokenIdParams,
+  DidAttributeClaimRequest,
+  QvCalculateRequest,
+  QvTallyRequest,
+  NovaAggregateRequest,
+  ThresholdInitRequest,
+  ThresholdAuthorityRegisterRequest,
+  ThresholdFinalizeRequest,
+  ThresholdEncryptRequest,
+  ThresholdTallyComputeRequest,
+  ThresholdDecryptShareRequest,
+  ThresholdTallyDecryptRequest,
+} from "../validation/schemas.js";

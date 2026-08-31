@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { extractTxHash } from "../lib/utils";
 import { notifyEvent } from "../lib/api";
 import {
@@ -203,7 +203,7 @@ export default function DAOProfileEditor({
     setSuccess(false);
 
     try {
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Check what changed
       const nameChanged = name.trim() !== daoName;
