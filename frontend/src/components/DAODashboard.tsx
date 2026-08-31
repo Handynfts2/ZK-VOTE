@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
@@ -164,7 +164,7 @@ export default function DAODashboard({
 
       if (publicKey && !useReadOnly) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           daoResult = await clients.daoRegistry.get_dao({
             dao_id: BigInt(daoId),
           });
@@ -242,7 +242,7 @@ export default function DAODashboard({
     if (!publicKey) return false;
     try {
       try {
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
         const result = await clients.membershipSbt.has({
           dao_id: BigInt(daoId),
           of: publicKey,
@@ -292,7 +292,7 @@ export default function DAODashboard({
       setJoining(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
@@ -349,7 +349,7 @@ export default function DAODashboard({
       setCreatingProposal(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       let endTime: bigint;
       if (data.deadlineSeconds === 0) {

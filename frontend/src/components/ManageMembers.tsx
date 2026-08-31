@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { useWallet } from "../hooks/useWallet";
 import { useMemberData } from "../hooks/useMemberData";
 import type { TreeInfo, Member } from "../hooks/useMemberData";
@@ -164,7 +164,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       // Check if address already has an SBT
       const alreadyHas = await clients.membershipSbt.has({
@@ -298,7 +298,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
@@ -373,7 +373,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       // Call the leave contract function
       const tx = await clients.membershipSbt.leave({
@@ -442,7 +442,7 @@ export default function ManageMembers({
       // Encrypt the new alias
       const encrypted = encryptAlias(newAlias, key);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       const tx = await clients.membershipSbt.update_alias({
         dao_id: BigInt(daoId),
@@ -490,7 +490,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
