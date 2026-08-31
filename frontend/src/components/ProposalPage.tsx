@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyVoting } from "../lib/readOnlyContracts";
 import { calculateNullifier } from "../lib/zkproof";
 import { getZKCredentials } from "../lib/zk";
@@ -108,7 +108,7 @@ export default function ProposalPage({
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Contract client types not fully exported
       const votingClient: any = publicKey
-        ? initializeContractClients(publicKey).voting
+        ? getZkVoteClient(publicKey).voting
         : getReadOnlyVoting();
 
       const proposalResult = await votingClient.get_proposal({
