@@ -23,7 +23,7 @@ import {
   Github,
   X,
 } from "lucide-react";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { toIdSlug } from "../lib/utils";
 import verificationKey from "../lib/verification_key_soroban.json";
 import { CONTRACTS } from "../config/contracts";
@@ -115,7 +115,7 @@ export function CreateDAOForm({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Helper function to retry transactions on TRY_AGAIN_LATER errors
       const sendWithRetry = async (
