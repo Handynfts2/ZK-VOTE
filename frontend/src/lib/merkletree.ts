@@ -164,11 +164,11 @@ export async function getMerklePath(
   daoId: number,
   publicKey: string,
 ): Promise<{ pathElements: string[]; pathIndices: number[] }> {
-  // Initialize contract clients
-  const clients = initializeContractClients(publicKey);
+  // Unified client
+  const client = getZkVoteClient(publicKey);
 
   // Call the on-chain get_merkle_path function
-  const result = await clients.membershipTree.get_merkle_path({
+  const result = await client.membershipTree.get_merkle_path({
     dao_id: BigInt(daoId),
     leaf_index: leafIndex,
   });

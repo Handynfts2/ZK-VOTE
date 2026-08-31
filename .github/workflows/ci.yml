@@ -58,6 +58,8 @@ jobs:
         run: npm ci --legacy-peer-deps
       - name: Type check
         run: npm run type-check
+      - name: Drift guard
+        run: npm run drift:check
       - name: Lint (includes JSDoc validation)
         run: npm run lint
       - name: Format check
@@ -84,6 +86,8 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Enforce lockfile integrity
+        run: npm ci --ignore-scripts --audit=false
       - name: Lint (includes JSDoc validation + type check)
         run: npm run lint
       - name: Format check
@@ -123,8 +127,15 @@ jobs:
           VOTING_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           TREE_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
           COMMENTS_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+      - name: Generate SBOM artifact
+        run: npm run sbom:generate
+      - name: Upload backend SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-sbom-${{ github.run_id }}
+          path: backend/.artifacts/sbom-backend.json
       - name: Security audit
-        run: npm audit --audit-level=high || true
+        run: npm run audit:check
       - name: Build verification
         run: npm run build
 
@@ -163,51 +174,12 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
-      - name: Compile circuits with Docker (reproducible build)
-        run: |
-          if [ -f "build/vote.r1cs" ] && [ -f "build/verification_key.json" ]; then
-            echo "Using cached circuit artifacts"
-          else
-            ../scripts/compile-circuits.sh --docker
-          fi
-      - name: Verify circuit artifact checksums (SLSA requirement)
-        run: |
-          if [ -f "build/vote.r1cs" ] || [ -f "build/verification_key.json" ]; then
-            ../scripts/verify-circuit-build.sh build artifacts.sha256
-          else
-            echo "Skipping verification - no compiled artifacts found"
-          fi
-      - name: Generate SBOM and provenance (SLSA L3)
-        run: |
-          echo "Circuit Build SBOM - $(date -u +%Y-%m-%dT%H:%M:%SZ)" > sbom.txt
-          echo "Build ID: ${{ github.run_id }}" >> sbom.txt
-          echo "Commit: ${{ github.sha }}" >> sbom.txt
-          echo "Circom Version: 2.1.8" >> sbom.txt
-          echo "Node Version: $(node --version)" >> sbom.txt
-          npm list --depth=0 >> sbom.txt
-      - name: Upload circuit artifacts and checksums
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: circuit-artifacts-${{ github.run_id }}
-          path: |
-            circuits/build/
-            circuits/artifacts.sha256
-            circuits/sbom.txt
       - name: Compile v2 circuits (if available)
         run: |
           if command -v circom &> /dev/null; then
             mkdir -p build_v2
-            if [ ! -f "build_v2/vote_v2.r1cs" ]; then
-              circom vote_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "v2 compile skipped"
-            else
-              echo "Using cached v2 circuit artifacts"
-            fi
-            if [ ! -f "build_v2/comment_v2.r1cs" ]; then
-              circom comment_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "comment_v2 compile skipped"
-            else
-              echo "Using cached comment_v2 circuit artifacts"
-            fi
+            circom vote_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "v2 compile skipped"
+            circom comment_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "comment_v2 compile skipped"
           else
             echo "circom not installed - v2 circuit compilation skipped"
           fi

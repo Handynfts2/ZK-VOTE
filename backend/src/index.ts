@@ -40,6 +40,10 @@ import {
   detectAndHandleWalIssue,
 } from "./services/walResilience.js";
 import {
+  startScheduledBackups,
+  stopScheduledBackups,
+} from "./services/backup.js";
+import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
 } from "./services/ipfs-monitor.js";
@@ -89,8 +93,14 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  auditRoutes,
+  authRoutes,
+  quadraticRoutes,
+  metricsRoutes,
   remediationRoutes,
+  novaRoutes,
+  adminRoutes,
+  thresholdRoutes,
+  randomnessRoutes,
 } from "./routes/index.js";
 import openApiSpec from "./openapi.js";
 
@@ -213,6 +223,20 @@ app.use(auditMiddleware);
 app.use(csrfGuard);
 
 // ============================================
+// CSRF TOKEN ENDPOINT
+// ============================================
+
+// Dedicated endpoint for CSRF token issuance.
+// The SPA calls GET /csrf-token on startup and stores the X-CSRF-Token
+// response header value.  The csrfTokenMiddleware (applied globally above)
+// handles the actual token generation for all GET requests; this route
+// just provides a predictable, documented URL for the frontend to target.
+app.get("/csrf-token", (_req, res) => {
+  // Token is already set in the response header by csrfTokenMiddleware.
+  res.json({ ok: true });
+});
+
+// ============================================
 // ROUTE INITIALIZATION
 // ============================================
 
@@ -232,13 +256,64 @@ app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
-app.use(auditRoutes);
-app.use(remediationRoutes);
+app.use(authRoutes);
+app.use(quadraticRoutes);
+app.use("/api/v1/nova", novaRoutes);
+app.use(noStore, adminRoutes);
+app.use(noStore, thresholdRoutes);
+app.use(noStore, randomnessRoutes);
 
-// OpenAPI spec endpoint (public, no audit log pollution for spec itself)
-app.get("/openapi.json", (_req, res) => {
-  res.json(openApiSpec);
+// ============================================
+// API VERSIONING (#139)
+// ============================================
+// URL-based versioning: mount the same routers under /api/v1 in addition to
+// the existing unversioned paths, so existing clients keep working while new
+// clients can opt into the explicit, cache-friendly versioned path. A
+// response header also advertises which version served the request.
+//
+// Deliberately out of scope for this pass (see PR body): deprecation/Sunset
+// headers for the unversioned routes, a version-lifecycle policy doc, and
+// updating the frontend to call /api/v1.
+app.use((_req, res, next) => {
+  res.setHeader("API-Version", "v1");
+  next();
 });
+
+const v1Router = express.Router();
+v1Router.use(metricsRoutes);
+v1Router.use(healthRoutes);
+v1Router.use(remediationRoutes);
+v1Router.use(noStore, votingRoutes);
+v1Router.use(daoRoutes);
+v1Router.use(ipfsRoutes);
+v1Router.use(commentsRoutes);
+v1Router.use(indexerRoutes);
+v1Router.use(bridgeRoutes);
+v1Router.use(circuitRoutes);
+v1Router.use(quadraticRoutes);
+v1Router.use(noStore, adminRoutes);
+v1Router.use(noStore, thresholdRoutes);
+v1Router.use(noStore, randomnessRoutes);
+app.use("/api/v1", v1Router);
+
+// OpenAPI spec + interactive docs
+const openApiDocument = buildOpenApiDocument();
+app.get("/api-docs/openapi.json", (_req, res) => res.json(openApiDocument));
+app.use(
+  "/api-docs",
+  // helmet's default CSP blocks the inline scripts/styles Swagger UI's
+  // bundled assets need; relax it for this documentation-only route.
+  (
+    _req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    res.removeHeader("Content-Security-Policy");
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(openApiDocument),
+);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -307,22 +382,43 @@ async function gracefulShutdown(reason: string): Promise<void> {
 
   await httpClosed;
 
-  const pending = getPendingSequenceLockOps();
-  if (pending > 0) {
-    log("info", "shutdown_draining_sequence_lock", { pending });
-  }
-  const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
-  log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
-    drained,
-    remaining: getPendingSequenceLockOps(),
-  });
+    // Keep the startup banner on stdout for human-readable output
+    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
 
-  try {
-    closeDb();
-    log("info", "shutdown_component_stopped", { component: "database" });
-  } catch (err) {
-    log("error", "shutdown_db_close_error", {
-      error: (err as Error).message,
+    logger.info("endpoints_registered", {
+      core: [
+        "/health",
+        "/ready",
+        "/config",
+        "/vote",
+        "/proposal/:dao/:prop",
+        "/root/:dao",
+        "/events/:daoId",
+        "/events/notify",
+        "/indexer/status",
+      ],
+      comments: [
+        "/comment/anonymous",
+        "/comments/:dao/:prop",
+        "/comments/:dao/:prop/nonce",
+        "/comment/:dao/:prop/:id",
+        "/comment/edit",
+        "/comment/delete",
+      ],
+      bridge: [
+        "/bridge/vote",
+        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
+        "/bridge/relay",
+      ],
+      ipfs: config.ipfsEnabled
+        ? [
+            "/ipfs/image",
+            "/ipfs/metadata",
+            "/ipfs/:cid",
+            "/ipfs/image/:cid",
+            "/ipfs/health",
+          ]
+        : [],
     });
   }
 
@@ -441,6 +537,10 @@ async function startBackgroundServices(): Promise<void> {
     startWalCheckpointing(database);
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
+    // Encrypted snapshot backups (#359) — opt-in via BACKUP_ENCRYPTION_ENABLED.
+    if (config.backupEncryptionEnabled) {
+      startScheduledBackups(config.backupIntervalMs);
+    }
   } catch (err) {
     log("warn", "wal_resilience_start_failed", {
       error: (err as Error).message,
@@ -469,6 +569,7 @@ function stopBackgroundServices(): void {
   stopSbtTransferWatch();
   stopPinMonitor();
   stopMemoryMonitor();
+  stopScheduledBackups();
 }
 
 // ============================================
