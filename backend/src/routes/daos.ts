@@ -38,7 +38,7 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { limit, offset, user } = (req as any).validatedQuery;
+  const { limit, offset, user, search, membershipType } = (req as any).validatedQuery;
 
   try {
     // The DAO list is served from the sync cache whether or not a user was
@@ -76,13 +76,18 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
       total,
       offset,
       limit,
+      search: search ?? null,
+      membershipType: membershipType ?? null,
     });
 
     res.json({
       data: paginatedDaos,
       pagination: {
-        cursor: hasMore ? String(offset + limit) : undefined,
+        cursor: String(offset),
+        nextCursor: hasMore ? String(offset + limit) : null,
         hasMore,
+        limit,
+        offset,
         total,
       },
       lastSync: dbService.getDaosSyncTime(),
