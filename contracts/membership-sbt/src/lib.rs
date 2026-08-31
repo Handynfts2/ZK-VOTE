@@ -23,6 +23,9 @@ pub enum SbtError {
     NotOpenMembership = 4,
     AlreadyInitialized = 5,
     CooldownActive = 6,
+    /// Raised by transfer/transfer_from/approve: membership SBTs are
+    /// soulbound and can never change hands (#357).
+    TransferAttempted = 7,
 }
 
 #[contracttype]
@@ -513,6 +516,64 @@ impl MembershipSbt {
             .instance()
             .get(&VERSION_KEY)
             .unwrap_or(VERSION)
+    }
+
+    // ── Soulbound guarantee: reject transfer/approval attempts (#357) ───────
+    //
+    // Membership SBTs are non-transferable by design: this contract never
+    // implemented `transfer`/`transfer_from`/`approve` in the first place, so
+    // Soroban already rejects any attempt to call them with a generic
+    // "function not found" trap. These explicit stubs exist so that a caller
+    // gets a specific, typed `TransferAttempted` error instead of an opaque
+    // host-level failure, and so the attempt is observable off-chain.
+    //
+    // `dao_id` is placed first (ahead of the familiar SEP-41 parameter order)
+    // so a fixed argument position reliably identifies which DAO an attempt
+    // targeted, for every guarded function, without per-function decoding
+    // rules on the indexing side.
+    //
+    // These functions always panic, which means Soroban rolls back every
+    // storage write *and* every event published earlier in the same
+    // invocation — so there is no way to also emit an on-chain event here to
+    // signal the attempt; a panicking call leaves no trace once the ledger
+    // closes. Detection instead happens off-chain in
+    // `backend/src/services/sbt-guard.ts`, which inspects the *attempted*
+    // invocation recorded in the transaction envelope (present whether the
+    // call succeeded or failed) rather than waiting for a committed event.
+
+    /// Always rejects: membership SBTs cannot be transferred.
+    pub fn transfer(env: Env, dao_id: u64, from: Address, to: Address, amount: i128) {
+        let _ = (dao_id, to, amount);
+        from.require_auth();
+        panic_with_error!(&env, SbtError::TransferAttempted);
+    }
+
+    /// Always rejects: membership SBTs cannot be transferred by a delegate.
+    pub fn transfer_from(
+        env: Env,
+        dao_id: u64,
+        spender: Address,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) {
+        let _ = (dao_id, from, to, amount);
+        spender.require_auth();
+        panic_with_error!(&env, SbtError::TransferAttempted);
+    }
+
+    /// Always rejects: membership SBTs cannot be approved for transfer.
+    pub fn approve(
+        env: Env,
+        dao_id: u64,
+        from: Address,
+        spender: Address,
+        amount: i128,
+        live_until_ledger: u32,
+    ) {
+        let _ = (dao_id, spender, amount, live_until_ledger);
+        from.require_auth();
+        panic_with_error!(&env, SbtError::TransferAttempted);
     }
 }
 

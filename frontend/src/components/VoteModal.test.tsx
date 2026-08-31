@@ -18,8 +18,8 @@ function renderWithQueryClient(ui: React.ReactElement) {
 }
 
 // Mock all external dependencies
-vi.mock("../lib/contracts", () => ({
-  initializeContractClients: vi.fn(() => ({
+vi.mock("../lib/client", () => ({
+  getZkVoteClient: vi.fn(() => ({
     membershipTree: {
       get_leaf_index: vi.fn().mockResolvedValue({ result: 0 }),
       current_root: vi.fn().mockResolvedValue({ result: BigInt("12345") }),

@@ -22,7 +22,8 @@ include "merkle_tree.circom";
 // NOTE: Unlike votes, comments don't have a "choice" field.
 // The commentNonce allows multiple comments per user per proposal (increment nonce for each).
 // Users track their own nonce locally.
-\n    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+template Comment(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)

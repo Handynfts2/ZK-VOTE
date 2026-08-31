@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyMembershipSbt } from "../lib/readOnlyContracts";
 import {
   generateDeterministicZKCredentials,
@@ -53,7 +53,7 @@ export function useProposalActions({
     const checkMembership = async () => {
       try {
         const sbt = publicKey
-          ? initializeContractClients(publicKey).membershipSbt
+          ? getZkVoteClient(publicKey).membershipSbt
           : getReadOnlyMembershipSbt();
         const hasSbtResult = await sbt.has({
           dao_id: BigInt(numericDaoId),
@@ -75,7 +75,7 @@ export function useProposalActions({
       setJoining(true);
       setActionError(null);
 
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       const tx = await clients.membershipSbt.self_join({
         dao_id: BigInt(numericDaoId),
@@ -114,7 +114,7 @@ export function useProposalActions({
       setRegistrationStatus(
         "Step 2/2: Registering commitment (sign transaction)...",
       );
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       const tx = await clients.membershipTree.register_with_caller({
         dao_id: BigInt(numericDaoId),
