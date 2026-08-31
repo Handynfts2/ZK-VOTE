@@ -14,8 +14,8 @@ vi.mock("../hooks/useWallet", () => ({
   })),
 }));
 
-vi.mock("../lib/contracts", () => ({
-  initializeContractClients: vi.fn(() => ({
+vi.mock("../lib/client", () => ({
+  getZkVoteClient: vi.fn(() => ({
     membershipSbt: {
       has: vi.fn().mockResolvedValue({ result: false }),
       mint: vi.fn().mockResolvedValue({
@@ -271,8 +271,8 @@ describe("ManageMembers", () => {
 
   describe("Error Handling", () => {
     it("displays error message when operation fails", async () => {
-      const { initializeContractClients } = await import("../lib/contracts");
-      (initializeContractClients as ReturnType<typeof vi.fn>).mockReturnValue({
+      const { getZkVoteClient } = await import("../lib/client");
+      (getZkVoteClient as ReturnType<typeof vi.fn>).mockReturnValue({
         membershipSbt: {
           has: vi.fn().mockRejectedValue(new Error("Network error")),
           mint: vi.fn().mockRejectedValue(new Error("Transaction failed")),

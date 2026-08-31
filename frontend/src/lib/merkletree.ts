@@ -1,5 +1,5 @@
 // Merkle tree path computation for Poseidon tree
-import { buildPoseidon } from "circomlibjs";
+// Lazy load circomlibjs
 import { initializeContractClients } from "./contracts";
 
 const TREE_DEPTH = 18;
@@ -29,7 +29,8 @@ let poseidonCache: any = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getPoseidon(): Promise<any> {
   if (!poseidonCache) {
-    poseidonCache = await buildPoseidon();
+    const circomlibjs = await import("circomlibjs");
+    poseidonCache = await circomlibjs.buildPoseidon();
   }
   return poseidonCache;
 }
@@ -163,11 +164,11 @@ export async function getMerklePath(
   daoId: number,
   publicKey: string,
 ): Promise<{ pathElements: string[]; pathIndices: number[] }> {
-  // Initialize contract clients
-  const clients = initializeContractClients(publicKey);
+  // Unified client
+  const client = getZkVoteClient(publicKey);
 
   // Call the on-chain get_merkle_path function
-  const result = await clients.membershipTree.get_merkle_path({
+  const result = await client.membershipTree.get_merkle_path({
     dao_id: BigInt(daoId),
     leaf_index: leafIndex,
   });

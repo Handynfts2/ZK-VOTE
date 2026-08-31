@@ -11,6 +11,7 @@ export * from "./secureStorage";
 export * from "./userStore";
 export * from "./electionStore";
 export * from "./uiStore";
+export * from "./appStore";
 
 // Initialize devtools protection
 configureDevtools();
