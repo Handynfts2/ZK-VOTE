@@ -42,6 +42,8 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             zk: ['snarkjs', 'circomlibjs'],
+            react: ['react', 'react-dom'],
+            stellar: ['@stellar/stellar-sdk']
           }
         }
       }
