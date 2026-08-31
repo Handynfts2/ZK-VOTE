@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { getReadOnlyVoting } from "../lib/readOnlyContracts";
 import { calculateNullifier } from "../lib/zkproof";
 import { getZKCredentials } from "../lib/zk";
@@ -16,6 +16,7 @@ import VoteModal from "./VoteModal";
 import ClaimRewards from "./ClaimRewards";
 import CommentSection from "./CommentSection";
 import VoteResults from "./VoteResults";
+import VoteEligibilityPreview from "./VoteEligibilityPreview";
 import ProposalContent from "./ProposalContent";
 import ProposalHeader from "./ProposalHeader";
 import { Clock, AlertCircle, ArrowLeft, Vote, Gift } from "lucide-react";
@@ -107,7 +108,7 @@ export default function ProposalPage({
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Contract client types not fully exported
       const votingClient: any = publicKey
-        ? initializeContractClients(publicKey).voting
+        ? getZkVoteClient(publicKey).voting
         : getReadOnlyVoting();
 
       const proposalResult = await votingClient.get_proposal({
@@ -414,6 +415,18 @@ export default function ProposalPage({
                   noVotes={proposal.noVotes}
                   isOpen={!isPastDeadline}
                 />
+
+                {/* Eligibility preview (issue #347) */}
+                {publicKey && (
+                  <VoteEligibilityPreview
+                    voteMode={proposal.voteMode}
+                    hasMembership={hasMembership}
+                    isRegistered={isRegistered}
+                    hasVoted={proposal.hasVoted}
+                    isOpen={!isPastDeadline}
+                    className="mt-4"
+                  />
+                )}
 
                 {/* Vote & Claim buttons */}
                 <div className="pt-4 flex justify-end gap-2">
