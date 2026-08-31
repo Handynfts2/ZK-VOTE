@@ -518,6 +518,12 @@ export async function notifyEvent(
   }
 }
 
+export interface SponsoredFeeRequest {
+  sponsor?: "relayer" | "voter";
+  feePayer?: string;
+  feeBudgetStroops?: number;
+}
+
 export interface CommitVoteInput {
   daoId: number;
   proposalId: number;

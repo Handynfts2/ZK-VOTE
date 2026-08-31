@@ -303,6 +303,14 @@ export const voteSchema = z
     encryptedPayload: z.union([z.string(), z.record(z.unknown())]).optional(),
     voterPublicKey: stellarAddress.optional(),
     voterSignature: z.string().min(1).optional(), // signed XDR from Freighter
+    sponsor: z.enum(["relayer", "voter"]).optional(),
+    feePayer: stellarAddress.optional(),
+    feeBudgetStroops: z.coerce
+      .number()
+      .int()
+      .positive("feeBudgetStroops must be a positive integer")
+      .max(1_000_000, "feeBudgetStroops exceeds the allowed relay cap")
+      .optional(),
   })
   .refine(
     (data) =>

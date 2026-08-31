@@ -98,6 +98,9 @@ export interface VoteRequest {
   proof: Groth16Proof;
   voterPublicKey?: string;
   voterSignature?: string;
+  sponsor?: "relayer" | "voter";
+  feePayer?: string;
+  feeBudgetStroops?: number;
 }
 
 // ============================================
