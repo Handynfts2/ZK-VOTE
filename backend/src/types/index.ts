@@ -12,6 +12,7 @@ declare global {
   namespace Express {
     interface Request {
       ctx?: string; // Request context ID for logging
+      traceId?: string; // W3C trace ID for logging/correlation
     }
   }
 }
