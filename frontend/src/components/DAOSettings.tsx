@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { extractTxHash } from "../lib/utils";
 import { notifyEvent } from "../lib/api";
 import { Button } from "./ui/Button";
@@ -51,7 +51,7 @@ export default function DAOSettings({
     setConfirmModal(null);
 
     try {
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
       const newValue = !membershipOpen;
 
       const tx = await clients.daoRegistry.set_membership_open({
@@ -87,7 +87,7 @@ export default function DAOSettings({
     setConfirmModal(null);
 
     try {
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
       const newValue = !membersCanPropose;
 
       const tx = await clients.daoRegistry.set_proposal_mode({
